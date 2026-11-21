@@ -1,0 +1,7 @@
+# local runs of main.ts (MAKEFUN_OUTPUT_DIR=out)
+out/
+out2/
+# never commit keys or transcripts
+*keypair*.json
+transcripts*.tar.gz
+.env

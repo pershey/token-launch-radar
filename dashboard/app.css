@@ -1,0 +1,82 @@
+/* Token Launch Radar: one palette (ink, slate, amber), one type scale, an 8px spacing step. */
+:root {
+  --ink: #0e1319;
+  --panel: #161d27;
+  --line: #263142;
+  --text: #e7ebf0;
+  --muted: #8d98a8;
+  --amber: #f2b84b;
+  --farm: #4cc38a;
+  --thin: #d9c04a;
+  --skip: #e0736a;
+  --step: 8px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3 { margin: 0; line-height: 1.2; }
+h1 { font-size: 22px; letter-spacing: 0.01em; }
+h2 { font-size: 20px; }
+h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: var(--step); }
+p { margin: 0; }
+
+#top { padding: calc(var(--step) * 2) calc(var(--step) * 3); border-bottom: 1px solid var(--line); }
+#top .lede { color: var(--muted); margin-top: 4px; max-width: 110ch; }
+.strip { display: flex; flex-wrap: wrap; gap: var(--step); margin: calc(var(--step) * 2) 0 0; }
+.strip div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: var(--step) calc(var(--step) * 1.5); }
+.strip dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.strip dd { margin: 2px 0 0; font-size: 15px; font-variant-numeric: tabular-nums; }
+.strip small { color: var(--muted); font-size: 12px; }
+
+#view { padding: calc(var(--step) * 2) calc(var(--step) * 3) calc(var(--step) * 6); }
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--step); margin-bottom: calc(var(--step) * 1.5); }
+.filters input[type="search"], .filters select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: inherit;
+}
+.filters input[type="search"] { min-width: 260px; }
+.filters label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.filters .count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.filters button { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--ink); color: var(--muted); font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; }
+th.sorted { color: var(--amber); }
+td.num, th.num { text-align: right; }
+tbody tr:hover { background: var(--panel); }
+.tag { font-size: 11px; color: var(--amber); border: 1px solid var(--amber); border-radius: 4px; padding: 0 5px; margin-left: 6px; }
+.muted { color: var(--muted); }
+.verdict { font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.05em; }
+.verdict.farm { color: var(--farm); }
+.verdict.thin { color: var(--thin); }
+.verdict.skip { color: var(--skip); }
+.neg { color: var(--skip); }
+.pos { color: var(--farm); }
+
+.detail { display: grid; grid-template-columns: minmax(320px, 5fr) minmax(360px, 7fr); gap: calc(var(--step) * 3); margin-top: calc(var(--step) * 2); }
+.detail header { grid-column: 1 / -1; }
+.detail header p { color: var(--muted); margin-top: 4px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: calc(var(--step) * 2); }
+.card + .card { margin-top: calc(var(--step) * 2); }
+.big { font-size: 34px; font-weight: 700; color: var(--amber); font-variant-numeric: tabular-nums; }
+.card table td { white-space: normal; }
+.card table tr:last-child td { border-bottom: 0; font-weight: 600; }
+.notes { margin: var(--step) 0 0; padding-left: 18px; color: var(--muted); }
+.steps { margin: 0; padding-left: 20px; }
+.steps li { margin-bottom: var(--step); white-space: normal; }
+.budget { display: flex; flex-wrap: wrap; gap: calc(var(--step) * 2); margin-bottom: calc(var(--step) * 1.5); }
+.budget div { font-size: 16px; font-variant-numeric: tabular-nums; }
+.budget .k { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.empty { color: var(--muted); padding: calc(var(--step) * 4) 0; text-align: center; }
+@media (max-width: 900px) { .detail { grid-template-columns: 1fr; } th, td { padding: 6px; } }
