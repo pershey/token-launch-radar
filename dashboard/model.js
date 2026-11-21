@@ -442,8 +442,11 @@
       });
     }
     rows.sort((x, y) => y.implied_value_usd - x.implied_value_usd || y.tvl_usd - x.tvl_usd || bySlug(x, y));
+    // Where a row would rank at either edge of its middle half, every other row unmoved.
+    const above = (v) => rows.filter((x) => x.implied_value_usd > v).length;
     rows.forEach((r, i) => {
       r.rank = i + 1;
+      r.rank_range = [Math.min(r.rank, 1 + above(r.range[1])), Math.max(r.rank, above(r.range[0]))];
       r.farm = farmPlan(r, asOf);
     });
     counts.ranked = rows.length;

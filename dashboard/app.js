@@ -96,7 +96,7 @@
       rows: rows,
       note: 'Ranked by implied value. Net of fees is the position’s modelled share of the launch minus the plan’s fees; board.json carries the default scenario (plan size, 5% drop share).',
       cols: [
-        { k: 'rank', label: '#', num: 1, up: 1, get: (r) => r.rank, cell: (r) => r.rank },
+        { k: 'rank', label: '# · range', num: 1, up: 1, get: (r) => r.rank, cell: (r) => r.rank + sub(r.rank_range[0] + '–' + r.rank_range[1]) },
         { k: 'name', label: 'Protocol', up: 1, get: (r) => r.name.toLowerCase(), cell: (r) => '<a class="name" href="#/p/' + encodeURIComponent(r.slug) + '">' + esc(r.name) + '</a><span class="tag ' + r.tier + '">' + TIER[r.tier] + '</span>' + sub(esc(r.category) + ' · ' + esc(r.farm.chain) + (r.chains.length > 1 ? ' +' + (r.chains.length - 1) : '')) },
         tvlCol,
         { k: 'change', label: '7d TVL', num: 1, get: (r) => r.change_7d, cell: (r) => '<span class="' + (r.change_7d === null ? 'muted' : tone(r.change_7d)) + '">' + pct(r.change_7d) + '</span>' },
@@ -152,10 +152,14 @@
     const head = view.cols.map((c) => '<th class="' + (c.num ? 'num' : '') + (c.k === col.k ? ' sorted' : '') + '"><a href="' + href({ sort: c.k, dir: c.k === col.k ? (dir === 1 ? 'desc' : 'asc') : '' }) + '">' + c.label + (c.k === col.k ? (dir === 1 ? ' ▲' : ' ▼') : '') + '</a></th>').join('');
     const body = list.length ? list.map((r) => '<tr>' + view.cols.map((c) => '<td' + (c.num ? ' class="num"' : '') + '>' + c.cell(r) + '</td>').join('') + '</tr>').join('') : '<tr><td class="empty" colspan="' + view.cols.length + '">No protocol matches these filters.</td></tr>';
     return {
+      list: list,
       count: list.length + ' of ' + view.rows.length + ' shown' + (onBoard ? ' · ' + usd(list.reduce((s, r) => s + r.implied_value_usd, 0)) + ' implied in view' : ''),
       html: '<table class="grid"><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table>',
     };
   }
+
+  /** The board rows on screen as CSV: a data URI, so it saves with no network. */
+  const csv = (list) => 'data:text/csv;charset=utf-8,' + encodeURIComponent('rank,best,worst,slug,category,tvl_usd,change_7d,no_token_days,implied_usd,low_usd,high_usd,verdict,net_usd,fees_usd,hours\n' + list.map((r) => [r.rank, r.rank_range[0], r.rank_range[1], r.slug, '"' + r.category + '"', r.tvl_usd, r.change_7d, r.age_days, r.implied_value_usd, r.range[0], r.range[1], r.plan.verdict, r.plan.net.toFixed(2), r.plan.cost.toFixed(2), r.plan.hours.toFixed(1)].join(',')).join('\n'));
 
   // ---- Proof strip: the page checks itself, counts every protocol and states how far to trust it ---
 
@@ -297,7 +301,8 @@
       '<input type="search" id="f-q" placeholder="Search protocol, category or chain" value="' + esc(state.q) + '">' +
       '<select id="f-cat"><option value="">All categories</option>' + options(categories, state.cat) + '</select>' +
       (onBoard ? '<select id="f-conf"><option value="">Any confidence</option>' + options(CONF, state.conf) + '</select>' : '') +
-      '<a class="chip solo" href="' + esc(hashFor(Object.assign({}, BLANK, { tab: state.tab }))) + '">Reset</a></div>' +
+      '<a class="chip solo" href="' + esc(hashFor(Object.assign({}, BLANK, { tab: state.tab }))) + '">Reset</a>' +
+      (onBoard ? '<a class="chip solo" download="radar.csv" href="' + csv(t.list) + '">CSV</a>' : '') + '</div>' +
       t.html +
       '</div><aside class="side">' + evidence() + formula() + assumptions() + '</aside></div>'
     );
