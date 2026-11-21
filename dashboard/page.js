@@ -117,7 +117,7 @@
         { k: 'cap', label: 'Market cap', num: 1, get: (r) => r.mcap_usd, cell: (r) => (r.mcap_usd ? usd(r.mcap_usd) : '<span class="muted">no cap reported</span>') },
         { k: 'ratio', label: 'Cap / TVL', num: 1, get: (r) => r.mcap_usd && r.mcap_usd / r.tvl_usd, cell: (r) => (r.mcap_usd ? (r.mcap_usd / r.tvl_usd).toFixed(2) : '') },
         { k: 'blind', label: 'Priced blind', num: 1, get: (r) => r.blind, cell: (r) => (r.blind ? usd(r.blind) : '') },
-        { k: 'miss', label: 'Miss', num: 1, get: (r) => r.blind && blindMiss(r), cell: (r) => (r.blind ? miss(blindMiss(r)) + sub(r.mcap_usd > r.blind ? 'priced too low' : 'priced too high') : '') },
+        { k: 'miss', label: 'Miss', num: 1, get: (r) => r.blind && blindMiss(r), cell: (r) => (r.blind ? miss(blindMiss(r)) + sub(r.mcap_usd > r.blind ? 'too low' : 'too high') : '') },
       ],
     },
     ticker: {
@@ -158,7 +158,7 @@
     };
   }
 
-  /** The board rows on screen as CSV: a data URI, so it saves with no network. */
+  /** The board rows on screen, as a CSV data URI. */
   const csv = (list) => 'data:text/csv;charset=utf-8,' + encodeURIComponent('rank,best,worst,slug,category,tvl_usd,change_7d,no_token_days,implied_usd,low_usd,high_usd,verdict,net_usd,fees_usd,hours\n' + list.map((r) => [r.rank, r.rank_range[0], r.rank_range[1], r.slug, '"' + r.category + '"', r.tvl_usd, r.change_7d, r.age_days, r.implied_value_usd, r.range[0], r.range[1], r.plan.verdict, r.plan.net.toFixed(2), r.plan.cost.toFixed(2), r.plan.hours.toFixed(1)].join(',')).join('\n'));
 
   // ---- Proof strip: the page checks itself, counts every protocol and states how far to trust it ---
@@ -246,7 +246,7 @@
   function assumptions() {
     return (
       '<section class="card"><h3>What the farm plans assume</h3>' +
-      '<p><code>farmPlan</code> sizes the position from TVL, age and drain, and takes fees off its share. Assumptions for budgeting, not snapshot data:</p>' +
+      '<p><code>farmPlan</code> sizes the position from TVL, age and drain, and takes fees off its share. Assumptions, not snapshot data:</p>' +
       '<ul class="notes"><li><b>' + M.DROP_SHARE * 100 + '%</b> of the implied value reaches depositors, pro rata to TVL (switch it above).</li>' +
       '<li><b>FARM</b> when net of fees beats idle cash at ' + M.IDLE_APR * 100 + '% a year, <b>THIN</b> when positive but below it, <b>SKIP</b> when fees exceed the share.</li>' +
       '<li>Fee per transaction: Ethereum ' + usd(M.chainFee('Ethereum')) + ', Bitcoin ' + usd(M.chainFee('Bitcoin')) + ', Solana ' + usd(M.chainFee('Solana')) + ', other chains ' + usd(M.chainFee('')) + '; trading fee 0.1%.</li></ul></section>'
@@ -344,7 +344,7 @@
       (r.notes.length ? '<ul class="notes">' + r.notes.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
       '</section>' +
       '<section class="card"><h3>Closest traded tokens by TVL</h3>' +
-      '<p>What the market pays at this size: the five comps nearest in TVL, their real cap and what the curve said blind.</p>' +
+      '<p>The five comps nearest in TVL: their real cap and what the curve said blind.</p>' +
       '<table class="test"><thead><tr><th>Token trades</th><th class="num">TVL</th><th class="num">Real cap</th><th class="num">Priced blind</th></tr></thead><tbody>' +
       near.map((c) => '<tr><td>' + esc(c.name) + sub(esc(c.category)) + '</td><td class="num">' + usd(c.tvl_usd) + '</td><td class="num">' + usd(c.mcap_usd) + '</td><td class="num">' + usd(c.blind) + '</td></tr>').join('') +
       '</tbody></table>' + scatter(r) + '<p class="cap">Ring: this protocol. Grey: real caps of traded tokens. Amber: the board.</p></section>' +

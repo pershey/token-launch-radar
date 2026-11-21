@@ -265,13 +265,14 @@
   const IDLE_APR = 0.05;   // the bar a farm has to clear: what the same dollars earn in a year doing nothing
 
   const ARCHETYPE = {
-    lend: ['Lending', 'Uncollateralized Lending', 'Collateral Markets', 'CDP', 'CDP Manager'],
+    lend: ['Lending', 'Uncollateralized Lending', 'Collateral Markets', 'CDP Manager'],
+    mint: ['CDP'],
     trade: ['Dexs', 'Derivatives', 'Prediction Market', 'OTC Marketplace', 'Interest Rate Derivatives'],
     dollar: ['RWA', 'Basis Trading', 'Dual-Token Stablecoin', 'Stablecoin Wrapper', 'Anchor BTC', 'Decentralized BTC', 'Payments', 'Crypto Card Issuer'],
     chain: ['Chain'],
   };
 
-  /** How a category is farmed: lend, trade, hold its dollar or BTC asset, use the chain, or deposit in a vault. */
+  /** How a category is farmed: lend, mint, trade, hold its dollar or BTC asset, use the chain, or deposit in a vault. */
   function archetype(category) {
     for (const kind of Object.keys(ARCHETYPE)) if (ARCHETYPE[kind].includes(category)) return kind;
     return 'vault';
@@ -324,6 +325,7 @@
     const core = {
       vault: 'Deposit ' + usd(deposit) + ' of USDC or ETH into ' + name + "'s largest vault by deposits; skip looped or leveraged strategies, which can be liquidated.",
       lend: 'Supply ' + usd(deposit) + ' of ETH or a stablecoin on ' + name + ', then borrow a stablecoin worth ' + usd(deposit / 4) + ' against it (25% loan-to-value) so both sides of the market record your address.',
+      mint: 'Open a vault on ' + name + ', lock ' + usd(deposit) + ' of its accepted collateral and mint ' + usd(deposit / 4) + ' of its stablecoin: a 400% collateral ratio, far from liquidation.',
       trade: 'Split ' + usd(deposit) + ' on ' + name + ': half as liquidity or margin in its deepest market, half kept liquid for trading.',
       dollar: 'Mint or buy ' + usd(deposit) + ' of ' + name + "'s own asset in its official app; if the issuer asks for KYC, finish it first (allow 1 to 3 days).",
       chain: 'Bridge ' + usd(deposit) + ' to ' + name + ' through its canonical bridge and split it across its two largest native apps (one swap venue, one lending market).',
@@ -334,7 +336,7 @@
       trade: 'Trade about ' + usd(weeklyVolume) + ' of volume a week in the most liquid pair, split over 2 or 3 days; at a 0.1% fee that is about ' + usd(weeklyVolume * 0.001) + ' a week on top of network fees.',
       dollar: "Hold the asset in your own wallet or in the issuer's own savings module, if it has one: issuers usually count holding time, and parking it in another protocol can drop you from their records.",
       chain: 'Touch at least three different contracts over the period (a swap, a loan, one native app): chains usually score distinct contracts and active weeks, not size.',
-    }[kind];
+    }[kind === 'mint' ? 'lend' : kind];
     const second = r.chains.length > 1 ? ' ' + name + ' also runs on ' + r.chains[1] + ': a quarter-size second position there is a separate deployment and costs about ' + usd(entry + 3 * chainFee(r.chains[1])) + ' more.' : '';
     const change = r.change_7d === null ? '7-day change unreported' : (r.change_7d >= 0 ? '+' : '') + r.change_7d.toFixed(1) + '% over 7 days';
     const verdictText = {
