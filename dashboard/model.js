@@ -1,16 +1,19 @@
 /* Token Launch Radar: the model.
    One file, loaded twice: main.ts runs it on Node to write board.json, and the page runs it in the
-   browser to explain every row. Nothing here names a protocol: each figure follows from the ten
-   fields the sealed snapshot carries (TVL, 7-day TVL change, listing date, category, chains, and
-   whether a token is recorded). */
+   browser to explain every row. Nothing here names a protocol: each figure follows from the fields
+   the sealed snapshot carries. The value model is fitted on the snapshot's own traded tokens, and
+   every term in it has to earn its place on tokens the fit never saw (testModels). */
 (function (root) {
   'use strict';
 
   const DAY_MS = 86400000;
   const FOLDS = 5;          // held-out test: comps sorted by slug, fold = index mod 5 (no randomness)
-  const MIN_COMPS = 5;      // a category needs this many traded comps to get its own multiple
-  const WIN_MARGIN = 0.95;  // the fitted curve replaces the multiples only if its held-out error is 5% lower
-  const KEEP_MARGIN = 1.02; // the shrunk curve replaces the raw fit if its held-out error is no more than 2% higher
+  const OLDER_SHARE = 0.6;  // second test: fit on the oldest 60% of the dated comps, price the newest 40%
+  const WIN_MARGIN = 0.95;  // the fitted curve is used only if its held-out miss is 5% under one flat multiple's
+  const KEEP_GAIN = 0.99;   // a term stays in the curve only if it cuts the five-fold miss by at least 1%
+  const KEEP_MARGIN = 1.02; // the range guard stays if it costs no more than 2% of held-out miss
+  const CAT_SHRINK = 5;     // a category's premium is its summed residual over (its comps + 5)
+  const TERMS = ['growth', 'age', 'category']; // tried in this order on top of the size curve
 
   // The house rule's visible half: products of a token that already trades are not launches to come.
   const DERIVATIVE_CATEGORIES = ['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX'];
@@ -21,12 +24,15 @@
   const notNull = (x) => x !== null;
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
   const mean = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
-  function median(xs) {
+  const bySlug = (p, q) => (p.slug < q.slug ? -1 : p.slug > q.slug ? 1 : 0);
+  function quantile(xs, q) {
     const a = xs.slice().sort((x, y) => x - y);
-    const n = a.length;
-    if (!n) return NaN;
-    return n % 2 ? a[(n - 1) / 2] : (a[n / 2 - 1] + a[n / 2]) / 2;
+    if (!a.length) return 0;
+    const pos = (a.length - 1) * q;
+    const lo = Math.floor(pos);
+    return a[lo] + (a[Math.ceil(pos)] - a[lo]) * (pos - lo);
   }
+  const median = (xs) => quantile(xs, 0.5);
 
   /** Days a protocol has been tracked as of the snapshot date; null when DefiLlama reports no listing day. */
   function ageDays(asOf, listedAt) {
@@ -49,36 +55,13 @@
     return null;
   }
 
-  // ---- Model A: category multiples with hand-set growth and age factors -------------------------
+  // ---- Baseline: one flat cap/TVL multiple, the median over the traded comps ------------------------
 
-  const growthFactor = (g) => (g === null ? 1 : 1 + 0.5 * Math.tanh(g / 25));
-  const ageFactor = (d) => 0.55 + 0.45 * Math.min(1, d / 365);
+  const fitFlat = (train) => ({ kind: 'F', n: train.length, use: {}, global: median(train.map((p) => p.mcap_usd / p.tvl_usd)) });
 
-  function fitMultiples(train, asOf) {
-    const byCat = {};
-    const ratios = train.map((p) => p.mcap_usd / p.tvl_usd);
-    train.forEach((p, i) => {
-      (byCat[p.category] = byCat[p.category] || []).push(ratios[i]);
-    });
-    const cat = {};
-    for (const c of Object.keys(byCat).sort()) cat[c] = { n: byCat[c].length, median: median(byCat[c]) };
-    const ages = train.map((p) => ageDays(asOf, p.listed_at)).filter(notNull);
-    return { kind: 'A', n: train.length, global: median(ratios), cat: cat, medAge: ages.length ? median(ages) : 365 };
-  }
+  // ---- The fitted curve: ln cap = b0 + b1 ln TVL (+ b2 growth) (+ b3 age) (+ category premium) -----
 
-  function multipleFor(fit, category) {
-    const c = fit.cat[category];
-    return c && c.n >= MIN_COMPS ? c.median : fit.global;
-  }
-
-  function predictMultiples(fit, p, asOf) {
-    const d = ageDays(asOf, p.listed_at);
-    return p.tvl_usd * multipleFor(fit, p.category) * growthFactor(p.change_7d) * ageFactor(d === null ? fit.medAge : d);
-  }
-
-  // ---- Model B: log-linear curve fitted to the traded comps by least squares ---------------------
-
-  /** ln TVL, the 7-day change as a fraction capped at +/-50%, and ln(1 + age in days); null stays null. */
+  /** ln TVL, the 7-day change as a fraction capped at +/-50%, and ln(1 + days with no token); null stays null. */
   function features(p, asOf) {
     const d = ageDays(asOf, p.listed_at);
     return {
@@ -113,41 +96,46 @@
     return x;
   }
 
-  function fitLogLinear(train, asOf) {
+  /** Least squares on the traded comps for the terms named in `use`, then a shrunk premium per category.
+      An unreported input reads as the comps' mean, so it moves the value neither way. */
+  function fitCurve(train, asOf, use) {
     const feats = train.map((p) => features(p, asOf));
-    const gMean = mean(feats.map((f) => f.g).filter(notNull));
-    const aMean = mean(feats.map((f) => f.a).filter(notNull));
-    const X = feats.map((f) => [1, f.t, f.g === null ? gMean : f.g, f.a === null ? aMean : f.a]);
-    const y = train.map((p) => Math.log(p.mcap_usd));
-    const XtX = [0, 1, 2, 3].map((i) => [0, 1, 2, 3].map((j) => X.reduce((s, row) => s + row[i] * row[j], 0)));
-    const Xty = [0, 1, 2, 3].map((i) => X.reduce((s, row, r) => s + row[i] * y[r], 0));
-    const b = solve(XtX, Xty) || [mean(y), 0, 0, 0];
     const gs = feats.map((f) => f.g).filter(notNull);
     const as = feats.map((f) => f.a).filter(notNull);
-    return {
+    const fit = {
       kind: 'B',
       n: train.length,
-      b: b,
-      gMean: gMean,
-      aMean: aMean,
-      sd: residualSd(X, y, b),
+      use: use,
+      cat: {},
+      gMean: mean(gs),
+      aMean: mean(as),
       // where 90% of the comps sit: beyond these edges the curve has almost no evidence
       gRange: [quantile(gs, 0.05), quantile(gs, 0.95)],
       aRange: [quantile(as, 0.05), quantile(as, 0.95)],
     };
+    const X = feats.map((f) => [1, f.t].concat(use.growth ? [f.g === null ? fit.gMean : f.g] : [], use.age ? [f.a === null ? fit.aMean : f.a] : []));
+    const y = train.map((p) => Math.log(p.mcap_usd));
+    const cols = X[0].map((_, i) => i);
+    const XtX = cols.map((i) => cols.map((j) => X.reduce((s, row) => s + row[i] * row[j], 0)));
+    const Xty = cols.map((i) => X.reduce((s, row, r) => s + row[i] * y[r], 0));
+    const b = solve(XtX, Xty) || cols.map((i) => (i ? 0 : mean(y)));
+    fit.b = [b[0], b[1], use.growth ? b[2] : 0, use.age ? b[b.length - 1] : 0];
+    if (use.category) {
+      const sum = {};
+      const count = {};
+      train.forEach((p, r) => {
+        sum[p.category] = (sum[p.category] || 0) + y[r] - X[r].reduce((s, v, i) => s + v * b[i], 0);
+        count[p.category] = (count[p.category] || 0) + 1;
+      });
+      for (const c of Object.keys(sum).sort()) fit.cat[c] = sum[c] / (count[c] + CAT_SHRINK);
+    }
+    return fit;
   }
 
-  function residualSd(X, y, b) {
-    const sq = X.reduce((s, row, r) => {
-      const e = y[r] - row.reduce((t, v, i) => t + v * b[i], 0);
-      return s + e * e;
-    }, 0);
-    return Math.sqrt(sq / Math.max(1, y.length - b.length));
-  }
-
-  /** What the curve reads for one protocol. An unreported input reads as the comps' mean; with the
-      guard on, growth and age are read no further out than the comps' own 5%..95% range. */
-  function curveInputs(fit, p, asOf, guard) {
+  /** The parts one valuation multiplies: what the TVL alone implies, then growth, age and category.
+      With the guard on, growth and age are read no further out than the comps' own 5%..95% range. */
+  function valueParts(fit, p, asOf, guard) {
+    if (fit.kind === 'F') return { base: p.tvl_usd * fit.global, growth: 1, age: 1, category: 1 };
     const f = features(p, asOf);
     let g = f.g === null ? fit.gMean : f.g;
     let a = f.a === null ? fit.aMean : f.a;
@@ -155,146 +143,85 @@
       g = clamp(g, fit.gRange[0], fit.gRange[1]);
       a = clamp(a, fit.aRange[0], fit.aRange[1]);
     }
-    return { t: f.t, g: g, a: a };
-  }
-
-  function predictLogLinear(fit, p, asOf, guard) {
-    const x = curveInputs(fit, p, asOf, guard);
-    return Math.exp(fit.b[0] + fit.b[1] * x.t + fit.b[2] * x.g + fit.b[3] * x.a);
-  }
-
-  // ---- Model C: the same curve, kept inside the comps' own range and shrunk ----------------------
-
-  const SHRINKS = [0, 0.1, 0.3, 1, 3, 10]; // ridge penalty on the growth and age terms, as a multiple of the comp count
-
-  function quantile(xs, q) {
-    const a = xs.slice().sort((x, y) => x - y);
-    if (!a.length) return 0;
-    const pos = (a.length - 1) * q;
-    const lo = Math.floor(pos);
-    return a[lo] + (a[Math.ceil(pos)] - a[lo]) * (pos - lo);
-  }
-
-  /** How one input is read: cut to the comps' own 5%..95% range, then centred and scaled. */
-  function scaler(values) {
-    const lo = quantile(values, 0.05);
-    const hi = quantile(values, 0.95);
-    const cut = values.map((v) => clamp(v, lo, hi));
-    const m = mean(cut);
-    const sd = Math.sqrt(mean(cut.map((v) => (v - m) * (v - m)))) || 1;
-    return { lo: lo, hi: hi, mean: m, sd: sd };
-  }
-
-  /** An unreported input reads as 0, the comps' mean: it moves the value neither way. */
-  const scaled = (s, v) => (v === null ? 0 : (clamp(v, s.lo, s.hi) - s.mean) / s.sd);
-
-  /** ln TVL, the 7-day TVL change as a fraction, and ln(1 + days tracked); null stays null. */
-  function inputs(p, asOf) {
-    const d = ageDays(asOf, p.listed_at);
-    return { t: Math.log(p.tvl_usd), g: p.change_7d === null ? null : p.change_7d / 100, a: d === null ? null : Math.log(1 + d) };
-  }
-
-  /** ln mcap = b0 + b1 (ln TVL - mean) + b2 z(growth) + b3 z(age), with b2 and b3 shrunk toward 0. */
-  function fitCurve(train, asOf, shrink) {
-    const ins = train.map((p) => inputs(p, asOf));
-    const tMean = mean(ins.map((f) => f.t));
-    const g = scaler(ins.map((f) => f.g).filter(notNull));
-    const a = scaler(ins.map((f) => f.a).filter(notNull));
-    const X = ins.map((f) => [1, f.t - tMean, scaled(g, f.g), scaled(a, f.a)]);
-    const y = train.map((p) => Math.log(p.mcap_usd));
-    const XtX = [0, 1, 2, 3].map((i) => [0, 1, 2, 3].map((j) => X.reduce((s, row) => s + row[i] * row[j], 0)));
-    const Xty = [0, 1, 2, 3].map((i) => X.reduce((s, row, r) => s + row[i] * y[r], 0));
-    XtX[2][2] += shrink * train.length;
-    XtX[3][3] += shrink * train.length;
-    const b = solve(XtX, Xty) || [mean(y), 0, 0, 0];
-    return { kind: 'C', n: train.length, shrink: shrink, b: b, tMean: tMean, g: g, a: a, sd: residualSd(X, y, b) };
-  }
-
-  /** The three parts one valuation multiplies: what the TVL alone implies, then growth, then age. */
-  function curveTerms(fit, p, asOf) {
-    const f = inputs(p, asOf);
     return {
-      base: Math.exp(fit.b[0] + fit.b[1] * (f.t - fit.tMean)),
-      growth: Math.exp(fit.b[2] * scaled(fit.g, f.g)),
-      age: Math.exp(fit.b[3] * scaled(fit.a, f.a)),
+      base: Math.exp(fit.b[0] + fit.b[1] * f.t + fit.b[2] * fit.gMean + fit.b[3] * fit.aMean),
+      growth: Math.exp(fit.b[2] * (g - fit.gMean)),
+      age: Math.exp(fit.b[3] * (a - fit.aMean)),
+      category: Math.exp(fit.cat[p.category] || 0),
     };
   }
 
-  function predictCurve(fit, p, asOf) {
-    const t = curveTerms(fit, p, asOf);
-    return t.base * t.growth * t.age;
+  function predict(fit, p, asOf, guard) {
+    const v = valueParts(fit, p, asOf, guard);
+    return v.base * v.growth * v.age * v.category;
   }
 
-  // ---- Held-out test: which model prices the traded comps better when it has not seen them -------
+  /** The middle half of a fit's own misses on the comps it was made from: [25%, 75%] of ln(actual / fitted). */
+  function missBand(fit, comps, asOf, guard) {
+    const own = comps.map((p) => Math.log(p.mcap_usd / predict(fit, p, asOf, guard)));
+    return [quantile(own, 0.25), quantile(own, 0.75)];
+  }
 
-  function ranks(xs) {
-    const order = xs.map((x, i) => [x, i]).sort((p, q) => p[0] - q[0]);
-    const out = new Array(xs.length);
-    for (let i = 0; i < order.length; ) {
-      let j = i;
-      while (j + 1 < order.length && order[j + 1][0] === order[i][0]) j++;
-      for (let k = i; k <= j; k++) out[order[k][1]] = (i + j) / 2 + 1;
-      i = j + 1;
+  // ---- Held-out tests: every traded comp is priced by a fit that never saw it ----------------------
+
+  /** Price `test` with a fit that saw only `train`. A miss is ln(actual / predicted); `inBand` counts
+      the held-out caps that land inside the middle-half band the fit states from `train` alone. */
+  function priceBlind(acc, train, test, asOf, fitFn, guard) {
+    const fit = fitFn(train, asOf);
+    const band = missBand(fit, train, asOf, guard);
+    for (const p of test) {
+      const guess = predict(fit, p, asOf, guard);
+      const miss = Math.log(p.mcap_usd / guess);
+      acc.miss.push(Math.abs(miss));
+      acc.blind[p.slug] = guess;
+      if (miss >= band[0] && miss <= band[1]) acc.inBand++;
     }
-    return out;
   }
 
-  function spearman(xs, ys) {
-    const rx = ranks(xs);
-    const ry = ranks(ys);
-    const mx = mean(rx);
-    const my = mean(ry);
-    let sxy = 0;
-    let sxx = 0;
-    let syy = 0;
-    for (let i = 0; i < rx.length; i++) {
-      sxy += (rx[i] - mx) * (ry[i] - my);
-      sxx += (rx[i] - mx) * (rx[i] - mx);
-      syy += (ry[i] - my) * (ry[i] - my);
-    }
-    return sxx > 0 && syy > 0 ? sxy / Math.sqrt(sxx * syy) : 0;
+  const tally = () => ({ miss: [], blind: {}, inBand: 0 });
+  const verdictOf = (acc) => ({ n: acc.miss.length, median: median(acc.miss), inBand: acc.inBand, blind: acc.blind });
+
+  /** Five folds by slug order: each comp is priced once, by a fit made on the other four folds. */
+  function heldOut(comps, asOf, fitFn, guard) {
+    const sorted = comps.slice().sort(bySlug);
+    const acc = tally();
+    for (let k = 0; k < FOLDS; k++) priceBlind(acc, sorted.filter((_, i) => i % FOLDS !== k), sorted.filter((_, i) => i % FOLDS === k), asOf, fitFn, guard);
+    return verdictOf(acc);
   }
 
-  /** Every comp is priced once by a model that never saw it; the error is |ln predicted - ln actual|. */
-  function heldOut(comps, asOf, fitFn, predictFn) {
-    const sorted = comps.slice().sort((p, q) => (p.slug < q.slug ? -1 : p.slug > q.slug ? 1 : 0));
-    const err = [];
-    const pred = [];
-    const actual = [];
-    const folds = [];
-    for (let k = 0; k < FOLDS; k++) {
-      const fit = fitFn(sorted.filter((_, i) => i % FOLDS !== k), asOf);
-      const e = [];
-      for (const p of sorted.filter((_, i) => i % FOLDS === k)) {
-        const guess = predictFn(fit, p, asOf);
-        e.push(Math.abs(Math.log(guess) - Math.log(p.mcap_usd)));
-        pred.push(guess);
-        actual.push(p.mcap_usd);
+  /** Older to newer: a fit on the oldest 60% of the comps with a listing day prices the newest 40%. */
+  function walkForward(comps, asOf, fitFn, guard) {
+    const dated = comps.filter((p) => p.listed_at !== null).sort((p, q) => (p.listed_at < q.listed_at ? -1 : p.listed_at > q.listed_at ? 1 : bySlug(p, q)));
+    const cut = Math.floor(dated.length * OLDER_SHARE);
+    const acc = tally();
+    priceBlind(acc, dated.slice(0, cut), dated.slice(cut), asOf, fitFn, guard);
+    return verdictOf(acc);
+  }
+
+  /** The whole test, rerun on every load. The flat multiple first; then the size curve, and each further
+      term in turn, kept only if it lowers the five-fold miss by 1%; then the range guard; and the curve
+      is used at all only if it beats the flat multiple by 5%. The older-to-newer column is shown, not used. */
+  function testModels(comps, asOf) {
+    const both = (fitFn, guard) => ({ cv: heldOut(comps, asOf, fitFn, guard), wf: walkForward(comps, asOf, fitFn, guard) });
+    const curve = (use, guard) => both((train) => fitCurve(train, asOf, use), guard);
+    const out = { n: comps.length, flat: both(fitFlat), steps: [], use: {} };
+    let best = curve(out.use);
+    out.steps.push(Object.assign({ term: 'size', kept: true }, best));
+    for (const term of TERMS) {
+      const use = Object.assign({}, out.use);
+      use[term] = true;
+      const trial = curve(use);
+      const kept = trial.cv.median <= KEEP_GAIN * best.cv.median;
+      out.steps.push(Object.assign({ term: term, kept: kept }, trial));
+      if (kept) {
+        out.use = use;
+        best = trial;
       }
-      folds.push({ n: e.length, median: median(e) });
-      for (const d of e) err.push(d);
     }
-    return { n: sorted.length, median: median(err), mean: mean(err), spearman: spearman(pred, actual), folds: folds };
-  }
-
-  /** The whole test: A against B, then the shrunk curve C at each strength, and the model the rules pick. */
-  function crossValidate(comps, asOf) {
-    const out = {
-      n: comps.length,
-      naive: heldOut(comps, asOf, fitMultiples, (fit, p) => p.tvl_usd * fit.global),
-      A: heldOut(comps, asOf, fitMultiples, predictMultiples),
-      B: heldOut(comps, asOf, fitLogLinear, predictLogLinear),
-      grid: SHRINKS.map((s) => Object.assign({ shrink: s }, heldOut(comps, asOf, (train) => fitCurve(train, asOf, s), predictCurve))),
-    };
-    // The strongest shrink whose held-out error is within 1% of the best: when in doubt, trust the terms less.
-    const best = Math.min.apply(null, out.grid.map((g) => g.median));
-    out.C = out.grid.filter((g) => g.median <= best * 1.01).pop();
-    out.shrink = out.C.shrink;
-    // B replaces A only if it is 5% better; C replaces B if it is no more than 2% worse.
-    out.winner = out.B.median <= WIN_MARGIN * out.A.median ? (out.C.median <= KEEP_MARGIN * out.B.median ? 'C' : 'B') : 'A';
-    // The guard (no reading beyond the comps' range) is kept if it costs no more than 2% of held-out error.
-    out.G = heldOut(comps, asOf, fitLogLinear, (fit, p, when) => predictLogLinear(fit, p, when, true));
-    out.guard = out.G.median <= KEEP_MARGIN * out.B.median;
+    out.guarded = out.use.growth || out.use.age ? curve(out.use, true) : null;
+    out.guard = out.guarded !== null && out.guarded.cv.median <= KEEP_MARGIN * best.cv.median;
+    out.winner = best.cv.median <= WIN_MARGIN * out.flat.cv.median ? 'B' : 'F';
+    out.chosen = out.winner === 'F' ? out.flat : out.guard ? out.guarded : best;
     return out;
   }
 
@@ -317,32 +244,18 @@
     return (index[familyStem(p.slug)] || []).filter((q) => q.slug !== p.slug && tokenState(q) !== 'pre').map((q) => q.slug);
   }
 
-  // ---- Valuation of one protocol ------------------------------------------------------------------
-
-  /** What the TVL alone implies, then the growth and age multipliers, under whichever model won. */
-  function valueParts(fit, p, asOf, guard) {
-    if (fit.kind === 'A') {
-      const d = ageDays(asOf, p.listed_at);
-      return { base: p.tvl_usd * multipleFor(fit, p.category), growth: growthFactor(p.change_7d), age: ageFactor(d === null ? fit.medAge : d) };
-    }
-    if (fit.kind === 'C') return curveTerms(fit, p, asOf);
-    const x = curveInputs(fit, p, asOf, guard);
-    return {
-      base: Math.exp(fit.b[0] + fit.b[1] * x.t + fit.b[2] * fit.gMean + fit.b[3] * fit.aMean),
-      growth: Math.exp(fit.b[2] * (x.g - fit.gMean)),
-      age: Math.exp(fit.b[3] * (x.a - fit.aMean)),
-    };
-  }
-
   /** What is unreported or outside the comps' range for one protocol; each note costs a confidence step. */
-  function inputNotes(fit, p, asOf) {
+  function inputNotes(fit, p, asOf, guard) {
     const notes = [];
     const f = features(p, asOf);
+    const use = fit.use;
     const outside = (v, range) => range !== undefined && (v < range[0] || v > range[1]);
-    if (f.g === null) notes.push('7-day TVL change unreported: growth term left neutral');
-    else if (outside(f.g, fit.gRange)) notes.push('7-day TVL change outside the range of the traded comps: read at the edge of that range');
-    if (f.a === null) notes.push('listing date unknown: age term left neutral');
-    else if (outside(f.a, fit.aRange)) notes.push('age outside the range of the traded comps: read at the edge of that range');
+    const edge = guard ? 'read at the edge of that range' : 'the curve is read beyond it';
+    if (use.growth && f.g === null) notes.push('7-day TVL change unreported: growth term left neutral');
+    else if (use.growth && outside(f.g, fit.gRange)) notes.push('7-day TVL change outside the range of the traded comps: ' + edge);
+    if (use.age && f.a === null) notes.push('listing date unknown: no-token time left neutral');
+    else if (use.age && outside(f.a, fit.aRange)) notes.push('no-token time outside the range of the traded comps: ' + edge);
+    if (use.category && !(p.category in fit.cat)) notes.push('no traded comp in this category: no category premium applied');
     return notes;
   }
 
@@ -382,8 +295,11 @@
   }
 
   /** The plan for one board row: position size from TVL, age and drain; weeks from age; fees from the
-      chain; and the position's modelled share of the launch, net of those fees. */
-  function farmPlan(r, asOf) {
+      chain; and the position's modelled share of the launch, net of those fees. `opt` lets the page
+      rerun it at another position size or drop share; board.json carries the plan with no `opt`. */
+  function farmPlan(r, asOf, opt) {
+    const o = opt || {};
+    const share = o.share || DROP_SHARE;
     // The plan starts on the first chain DefiLlama lists for the protocol; the snapshot does not say which chain holds most TVL.
     const chain = r.chains.length ? r.chains[0] : 'its home chain';
     const fee = chainFee(chain);
@@ -392,13 +308,15 @@
     let deposit = r.tvl_usd >= 1e9 ? 2500 : r.tvl_usd >= 1e8 ? 1000 : 500;
     if (draining) deposit /= 2;
     if (r.age_days !== null && r.age_days < 90) deposit = Math.min(deposit, 500);
+    if (o.deposit) deposit = o.deposit;
     const weeks = r.age_days === null ? 12 : r.age_days < 180 ? 8 : r.age_days < 730 ? 12 : 16;
     const entry = chain === 'Ethereum' ? 5 : 2;
     const weeklyVolume = deposit / 4;
     const tradeFees = kind === 'trade' ? weeks * weeklyVolume * 0.001 : 0;
     const cost = entry + fee * (5 + weeks) + tradeFees;
     const hours = (20 + 15 + 10 + 5 * weeks + 10 * Math.ceil(weeks / 4) + 10) / 60;
-    const drop = (r.implied_value_usd * DROP_SHARE * deposit) / r.tvl_usd;
+    const pool = (r.implied_value_usd * deposit) / r.tvl_usd; // this position's pro-rata slice of the whole implied value
+    const drop = pool * share;
     const net = drop - cost;
     const bar = (deposit * IDLE_APR * weeks) / 52;
     const verdict = net >= bar ? 'farm' : net > 0 ? 'thin' : 'skip';
@@ -424,16 +342,33 @@
       thin: 'THIN: positive after fees, but less than the ' + usd(bar) + ' the same dollars would earn idle at ' + IDLE_APR * 100 + '% a year.',
       skip: 'SKIP at this size: fees exceed the modelled share.',
     }[verdict];
+    // Each step: what to do, what it costs, how long it takes.
     const steps = [
-      'Fund a fresh wallet on ' + chain + ' with ' + usd(deposit) + ' plus ' + usd(Math.max(1, Math.ceil(fee * (5 + weeks)))) + ' for fees, by exchange withdrawal or a bridge. Cost: about ' + usd(entry) + '. Time: 20 minutes.',
-      core + ' Cost: about ' + usd(2 * fee) + ' in network fees (approve, then deposit). Time: 15 minutes.',
-      depth + second + ' Cost: about ' + usd(fee) + ' per transaction. Time: 10 minutes.',
-      'Return once a week for ' + weeks + ' weeks and make one small on-chain action (add, claim, compound or adjust) so every week shows activity. Cost: about ' + usd(fee * weeks) + ' in total. Time: 5 minutes a week.',
-      'Once a month, open ' + name + "'s app and look for a points, season or referral page; screenshot your totals and log every transaction hash in one sheet. Cost: $0. Time: 10 minutes a month.",
-      'Exit rule: TVL was ' + usd(r.tvl_usd) + ' on ' + asOf + ' (' + change + ')' + (draining ? ', already draining, so the position is half-size' : '') + '. Withdraw in full if TVL falls 30% below that, if withdrawals are paused, or at week ' + weeks + ' with no token or points programme announced. Cost: about ' + usd(2 * fee) + '. Time: 10 minutes.',
-      'Budget: ' + usd(cost) + ' in fees and about ' + hours.toFixed(1) + ' hours over ' + weeks + ' weeks on a ' + usd(deposit) + ' position. If ' + DROP_SHARE * 100 + '% of the ' + usd(r.implied_value_usd) + ' implied launch value reached depositors pro rata to TVL, this position would receive about ' + usd(drop) + ', or ' + usd(net) + ' net of fees. ' + verdictText,
+      ['Fund a fresh wallet on ' + chain + ' with ' + usd(deposit) + ' plus ' + usd(Math.max(1, Math.ceil(fee * (5 + weeks)))) + ' for fees, by exchange withdrawal or a bridge.', 'about ' + usd(entry), '20 minutes'],
+      [core, 'about ' + usd(2 * fee) + ' in network fees (approve, then deposit)', '15 minutes'],
+      [depth + second, 'about ' + usd(fee) + ' per transaction', '10 minutes'],
+      ['Return once a week for ' + weeks + ' weeks and make one small on-chain action (add, claim, compound or adjust) so every week shows activity.', 'about ' + usd(fee * weeks) + ' in total', '5 minutes a week'],
+      ['Once a month, open ' + name + "'s app and look for a points, season or referral page; screenshot your totals and log every transaction hash in one sheet.", '$0', '10 minutes a month'],
+      ['Exit rule: TVL was ' + usd(r.tvl_usd) + ' on ' + asOf + ' (' + change + ')' + (draining && !o.deposit ? ', already draining, so the position is half-size' : '') + '. Withdraw in full if TVL falls 30% below that, if withdrawals are paused, or at week ' + weeks + ' with no token or points programme announced.', 'about ' + usd(2 * fee), '10 minutes'],
     ];
-    return { kind: kind, chain: chain, deposit: deposit, weeks: weeks, cost: cost, hours: hours, drop: drop, net: net, bar: bar, verdict: verdict, steps: steps };
+    const budget = 'Budget: ' + usd(cost) + ' in fees and about ' + hours.toFixed(1) + ' hours over ' + weeks + ' weeks on a ' + usd(deposit) + ' position. If ' + share * 100 + '% of the ' + usd(r.implied_value_usd) + ' implied launch value reached depositors pro rata to TVL, this position would receive about ' + usd(drop) + ', or ' + usd(net) + ' net of fees. ' + verdictText;
+    return {
+      kind: kind,
+      chain: chain,
+      deposit: deposit,
+      weeks: weeks,
+      cost: cost,
+      hours: hours,
+      drop: drop,
+      net: net,
+      perHour: net / hours,
+      breakEven: cost / pool, // the drop share at which this position only pays back its fees
+      bar: bar,
+      verdict: verdict,
+      steps: steps,
+      budget: budget,
+      lines: steps.map((s) => s[0] + ' Cost: ' + s[1] + '. Time: ' + s[2] + '.').concat(budget), // board.json's farm_steps
+    };
   }
 
   // ---- The whole radar: every protocol in the snapshot is ranked, set aside or counted as trading ---
@@ -443,8 +378,11 @@
     const watch = new Set(snapshot.watchlist);
     const index = familyIndex(snapshot.protocols);
     const comps = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0);
-    const cv = crossValidate(comps, asOf);
-    const fit = cv.winner === 'A' ? fitMultiples(comps, asOf) : cv.winner === 'C' ? fitCurve(comps, asOf, cv.shrink) : fitLogLinear(comps, asOf);
+    const test = testModels(comps, asOf);
+    const use = test.winner === 'F' ? {} : test.use;
+    const guard = test.winner === 'B' && test.guard;
+    const fit = test.winner === 'F' ? fitFlat(comps) : fitCurve(comps, asOf, use);
+    const band = missBand(fit, comps, asOf, guard);
 
     // The sibling rule is tested on the watchlist, which the house built from protocols with no parent.
     const falseKin = snapshot.protocols.filter((p) => watch.has(p.slug) && tokenKin(index, p).length > 0).map((p) => p.slug);
@@ -453,10 +391,15 @@
     const counts = { total: snapshot.protocols.length, live: 0, recorded: 0, pre: 0, ranked: 0, unscored: 0, aside: { category: 0, exchange: 0, wrapped: 0, version: 0, family: 0 } };
     const rows = [];
     const aside = [];
+    const traded = [];
+    const ticker = [];
     for (const p of snapshot.protocols) {
       const state = tokenState(p);
+      const category = p.category === null ? 'Uncategorized' : p.category;
       if (state !== 'pre') {
         counts[state]++;
+        // A token on record is never ranked; `blind` is what a fit that never saw the comp priced it at.
+        (state === 'live' ? traded : ticker).push({ slug: p.slug, name: p.name, category: category, tvl_usd: p.tvl_usd, symbol: p.symbol, mcap_usd: p.mcap_usd > 0 ? p.mcap_usd : null, blind: test.chosen.cv.blind[p.slug] || null });
         continue;
       }
       counts.pre++;
@@ -466,16 +409,16 @@
       if (reason === null && !onWatch && familyTrusted && kin.length > 0) reason = 'family';
       if (reason !== null) {
         counts.aside[reason]++;
-        aside.push({ slug: p.slug, name: p.name, category: p.category, tvl_usd: p.tvl_usd, reason: reason, kin: kin });
+        aside.push({ slug: p.slug, name: p.name, category: category, tvl_usd: p.tvl_usd, reason: reason, kin: kin });
         continue;
       }
-      const parts = valueParts(fit, p, asOf, cv.guard);
-      const implied = Math.round(parts.base * parts.growth * parts.age);
+      const parts = valueParts(fit, p, asOf, guard);
+      const implied = Math.round(parts.base * parts.growth * parts.age * parts.category);
       if (!Number.isFinite(implied) || implied < 1) {
         counts.unscored++; // no value is invented: a row that cannot be priced stays off the board
         continue;
       }
-      const notes = inputNotes(fit, p, asOf);
+      const notes = inputNotes(fit, p, asOf, guard);
       // The house kept every parentless protocol above its floor on the watchlist, so one above the
       // floor that passes the visible rules yet is not listed must have a parent DefiLlama records.
       const parentInferred = !onWatch && p.tvl_usd >= snapshot.floor_usd;
@@ -483,21 +426,22 @@
       rows.push({
         slug: p.slug,
         name: p.name,
-        category: p.category === null ? 'Uncategorized' : p.category,
+        category: category,
         chains: p.chains,
         tvl_usd: p.tvl_usd,
         change_7d: p.change_7d,
         listed_at: p.listed_at,
         age_days: ageDays(asOf, p.listed_at),
         watchlist: onWatch,
-        parent_inferred: parentInferred,
+        tier: onWatch ? 'watchlist' : parentInferred ? 'offlist' : 'below',
         implied_value_usd: implied,
+        range: [Math.max(1, Math.round(implied * Math.exp(band[0]))), Math.round(implied * Math.exp(band[1]))],
         parts: parts,
         notes: notes,
         confidence: ['high', 'medium', 'low'][Math.min(2, notes.length)],
       });
     }
-    rows.sort((x, y) => y.implied_value_usd - x.implied_value_usd || y.tvl_usd - x.tvl_usd || (x.slug < y.slug ? -1 : 1));
+    rows.sort((x, y) => y.implied_value_usd - x.implied_value_usd || y.tvl_usd - x.tvl_usd || bySlug(x, y));
     rows.forEach((r, i) => {
       r.rank = i + 1;
       r.farm = farmPlan(r, asOf);
@@ -508,49 +452,14 @@
       source: snapshot.source,
       floor_usd: snapshot.floor_usd,
       counts: counts,
-      model: { winner: cv.winner, guard: cv.guard, cv: cv, fit: fit, comps: comps.length },
+      model: { winner: test.winner, guard: guard, use: use, test: test, fit: fit, band: band, comps: comps.length },
       family: { trusted: familyTrusted, false_on_watchlist: falseKin },
       rows: rows,
       aside: aside,
+      traded: traded,
+      ticker: ticker,
     };
   }
 
-  root.RadarModel = {
-    tokenKin: tokenKin,
-    familyIndex: familyIndex,
-    valueParts: valueParts,
-    inputNotes: inputNotes,
-    archetype: archetype,
-    chainFee: chainFee,
-    usd: usd,
-    DROP_SHARE: DROP_SHARE,
-    IDLE_APR: IDLE_APR,
-    farmPlan: farmPlan,
-    buildRadar: buildRadar,
-    FOLDS: FOLDS,
-    MIN_COMPS: MIN_COMPS,
-    WIN_MARGIN: WIN_MARGIN,
-    median: median,
-    ageDays: ageDays,
-    tokenState: tokenState,
-    setAsideReason: setAsideReason,
-    growthFactor: growthFactor,
-    ageFactor: ageFactor,
-    fitMultiples: fitMultiples,
-    multipleFor: multipleFor,
-    predictMultiples: predictMultiples,
-    features: features,
-    fitLogLinear: fitLogLinear,
-    curveInputs: curveInputs,
-    predictLogLinear: predictLogLinear,
-    SHRINKS: SHRINKS,
-    KEEP_MARGIN: KEEP_MARGIN,
-    scaled: scaled,
-    inputs: inputs,
-    fitCurve: fitCurve,
-    curveTerms: curveTerms,
-    predictCurve: predictCurve,
-    heldOut: heldOut,
-    crossValidate: crossValidate,
-  };
+  root.RadarModel = { DROP_SHARE: DROP_SHARE, IDLE_APR: IDLE_APR, chainFee: chainFee, usd: usd, farmPlan: farmPlan, testModels: testModels, buildRadar: buildRadar };
 })(globalThis);

@@ -43,8 +43,12 @@ type BoardRow = {
   category: string;
   tvl_usd: number;
   watchlist: boolean;
+  tier: string;
+  value_low_usd: number;
+  value_high_usd: number;
   confidence: string;
   verdict: string;
+  farm_net_usd: number;
 };
 
 const model = (globalThis as any).RadarModel;
@@ -124,27 +128,39 @@ const rows: BoardRow[] = radar.rows.map((r: any) => ({
   slug: r.slug,
   name: r.name,
   implied_value_usd: r.implied_value_usd,
-  farm_steps: r.farm.steps,
+  farm_steps: r.farm.lines,
   category: r.category,
   tvl_usd: r.tvl_usd,
   watchlist: r.watchlist,
+  tier: r.tier,
+  value_low_usd: r.range[0],
+  value_high_usd: r.range[1],
   confidence: r.confidence,
   verdict: r.farm.verdict,
+  farm_net_usd: Math.round(r.farm.net * 100) / 100,
 }));
 
 const issues = gateIssues(rows, snapshot);
 if (issues.length > 0) stop(`the board would fail the gate, so nothing was written:\n  ${issues.slice(0, 20).join('\n  ')}`);
 
-const cv = radar.model.cv;
+// What the model's own tests said on this snapshot, so board.json can be read without the page.
+const test = radar.model.test;
 const board = {
   as_of: radar.as_of,
   source: radar.source,
   floor_usd: radar.floor_usd,
   model: {
-    chosen: radar.model.winner,
-    guard: radar.model.guard,
+    chosen: radar.model.winner === 'F' ? 'flat multiple' : 'fitted curve',
+    terms_kept: test.steps.filter((s: any) => s.kept).map((s: any) => s.term),
+    terms_tested_not_kept: test.steps.filter((s: any) => !s.kept).map((s: any) => s.term),
+    range_guard: radar.model.guard,
     comps: radar.model.comps,
-    held_out_median_abs_log_error: { multiples: cv.A.median, fitted_curve: cv.B.median, fitted_curve_guarded: cv.G.median, tvl_only_multiple: cv.naive.median },
+    held_out_median_abs_log_error: {
+      flat_multiple: test.flat.cv.median,
+      chosen_five_fold: test.chosen.cv.median,
+      chosen_older_to_newer: test.chosen.wf.median,
+    },
+    middle_half_range_holds: { inside: test.chosen.cv.inBand, of: test.chosen.cv.n },
     drop_share_assumed: model.DROP_SHARE,
   },
   counts: radar.counts,
@@ -168,5 +184,5 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: 655
 const c = radar.counts;
 process.stdout.write(
   `token-launch-radar: ${c.total} protocols: ${c.ranked} ranked, ${c.pre - c.ranked - c.unscored} set aside, ${c.unscored} unpriced, ${c.live} trading, ${c.recorded} with a ticker only\n` +
-    `token-launch-radar: model ${radar.model.winner}${radar.model.guard ? ' with the range guard' : ''}; watchlist ${snapshot.watchlist.length}/${snapshot.watchlist.length} covered; wrote ${out}\n`,
+    `token-launch-radar: ${radar.model.winner === 'F' ? 'flat multiple' : 'fitted curve'}${radar.model.guard ? ' with the range guard' : ''}; watchlist ${snapshot.watchlist.length}/${snapshot.watchlist.length} covered; wrote ${out}\n`,
 );
