@@ -384,6 +384,7 @@
   /** The plan for one board row: position size from TVL, age and drain; weeks from age; fees from the
       chain; and the position's modelled share of the launch, net of those fees. */
   function farmPlan(r, asOf) {
+    // The plan starts on the first chain DefiLlama lists for the protocol; the snapshot does not say which chain holds most TVL.
     const chain = r.chains.length ? r.chains[0] : 'its home chain';
     const fee = chainFee(chain);
     const kind = archetype(r.category);

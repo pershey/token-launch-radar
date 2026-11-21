@@ -25,7 +25,7 @@
     { key: 'rank', label: '#', num: true, get: (r) => r.rank, cell: (r) => r.rank },
     { key: 'name', label: 'Protocol', get: (r) => r.name.toLowerCase(), cell: (r) => '<a href="#/p/' + encodeURIComponent(r.slug) + '">' + esc(r.name) + '</a>' + (r.watchlist ? '<span class="tag">watchlist</span>' : '') },
     { key: 'category', label: 'Category', get: (r) => r.category, cell: (r) => esc(r.category) },
-    { key: 'chain', label: 'Main chain', get: (r) => r.farm.chain, cell: (r) => esc(r.farm.chain) + (r.chains.length > 1 ? ' <span class="muted">+' + (r.chains.length - 1) + '</span>' : '') },
+    { key: 'chain', label: 'Chain', get: (r) => r.farm.chain, cell: (r) => esc(r.farm.chain) + (r.chains.length > 1 ? ' <span class="muted">+' + (r.chains.length - 1) + '</span>' : '') },
     { key: 'tvl', label: 'TVL', num: true, get: (r) => r.tvl_usd, cell: (r) => usd(r.tvl_usd) },
     { key: 'change', label: '7d TVL', num: true, get: (r) => (r.change_7d === null ? -Infinity : r.change_7d), cell: (r) => '<span class="' + (r.change_7d === null ? 'muted' : r.change_7d < 0 ? 'neg' : 'pos') + '">' + change(r.change_7d) + '</span>' },
     { key: 'age', label: 'Tokenless for', num: true, get: (r) => (r.age_days === null ? -Infinity : r.age_days), cell: (r) => tokenless(r.age_days) },
