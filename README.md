@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/pershey/token-launch-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/pershey/token-launch-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-A static radar of the DeFi protocols that record no token on DefiLlama: it ranks them by an implied launch value fitted on the snapshot's own traded tokens, keeps a term in that fit only if it lowers the miss on tokens the fit never saw, and gives every row a farm plan with its cost, its time and a verdict net of fees. One model file (`dashboard/model.js`) writes `board.json` under Node and redraws the same numbers in the browser, with no network and no list of names.
+A static radar of the DeFi protocols that record no token on DefiLlama. It ranks them by an implied launch value: what the snapshot's own traded tokens say a launch at that TVL is worth, times how often peers that long on record already carry a token. A term stays in either fit only if it does better on protocols the fit never saw, in two tests, and every row gets a farm plan with its cost, its time and a verdict net of fees. One model file (`dashboard/model.js`) writes `board.json` under Node and redraws the same numbers in the browser, with no network and no list of names.
 
 ## Run it
 

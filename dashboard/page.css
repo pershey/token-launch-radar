@@ -62,7 +62,7 @@ i.wrapped, i.exchange { background: #8a7a55; }
 .tab { padding: 8px 14px; color: var(--muted); border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; }
 .tab.on { background: var(--panel); border-color: var(--line); color: var(--text); font-weight: 600; }
 .tab i, .chip i { font-style: normal; font-size: 11px; color: var(--muted); }
-.split { display: grid; grid-template-columns: minmax(0, 1fr) 372px; gap: calc(var(--s) * 3); align-items: start; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 356px; gap: calc(var(--s) * 3); align-items: start; }
 .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
 .controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s); margin: 10px 0; }
 .controls .k { margin: 0 -2px 0 6px; }
@@ -80,14 +80,14 @@ th, td { padding: 7px 8px; text-align: left; vertical-align: top; border-bottom:
 th { color: var(--muted); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
 th.num, td.num { text-align: right; }
 .grid th { position: sticky; top: 0; background: var(--ink); z-index: 1; }
-.grid td { white-space: nowrap; padding: 5px 8px; }
-.grid td:nth-child(2) { max-width: 270px; overflow: hidden; text-overflow: ellipsis; }
+.grid td { white-space: nowrap; padding: 5px 7px; }
+.grid td:nth-child(2) { max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
 .grid tbody tr:hover { background: var(--panel); }
 th.sorted, th.sorted a { color: var(--amber); }
 .name { font-weight: 600; font-size: 13.5px; }
 .tag { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); font-size: 10px; font-weight: 400; text-transform: uppercase; letter-spacing: 0.05em; vertical-align: 1px; }
 .tag.watchlist { border-color: var(--amber); color: var(--amber); }
-.range { display: block; position: relative; width: 124px; height: 6px; margin: 4px 0 2px auto; background: var(--raise); border-radius: 3px; }
+.range { display: block; position: relative; width: 112px; height: 6px; margin: 4px 0 2px auto; background: var(--raise); border-radius: 3px; }
 .range i { position: absolute; top: 0; bottom: 0; background: #7a6230; border-radius: 3px; }
 .range u { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--amber); }
 .verdict { display: inline-block; padding: 0 6px; border: 1px solid; border-radius: 3px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -104,9 +104,8 @@ th.sorted, th.sorted a { color: var(--amber); }
 .card h3 { font-size: 14px; margin-bottom: 6px; }
 .card p { color: var(--muted); font-size: 12px; margin-bottom: var(--s); }
 .card p b { color: var(--text); }
-.card .cap { font-size: 11px; margin: 4px 0 0; }
 .test { margin-bottom: 10px; }
-.test th, .test td { padding: 5px; font-size: 12px; }
+.test th, .test td { padding: 5px 3px; font-size: 12px; }
 .test tr.base td { color: var(--muted); }
 .test tr.final td { font-weight: 700; border-bottom: 0; }
 .mark { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
@@ -116,12 +115,6 @@ th.sorted, th.sorted a { color: var(--amber); }
 .notes { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
 .notes li { margin-bottom: 4px; }
 .notes b { color: var(--text); }
-.plot { display: block; width: 100%; height: auto; }
-.plot line { stroke: var(--line); }
-.plot text { fill: var(--muted); font-size: 9px; }
-.plot .c { fill: #5b6a82; }
-.plot .r { fill: var(--amber); opacity: 0.85; }
-.plot .m { fill: none; stroke: #fff; stroke-width: 2; }
 
 .detail header { display: flex; justify-content: space-between; align-items: flex-end; gap: calc(var(--s) * 3); margin: calc(var(--s) * 3) 0 calc(var(--s) * 2); }
 .detail h2 { font-size: 22px; }
@@ -134,7 +127,4 @@ th.sorted, th.sorted a { color: var(--amber); }
 .steps td:nth-child(3), .steps td:nth-child(4) { color: var(--muted); font-size: 12px; min-width: 96px; }
 .steps tr.final td { border-bottom: 0; color: var(--text); }
 
-@media (max-width: 1100px) {
-  .kpis { grid-template-columns: repeat(3, 1fr); }
-  .split, .cols { grid-template-columns: 1fr; }
-}
+@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, 1fr); } .split, .cols { grid-template-columns: 1fr; } }

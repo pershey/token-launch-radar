@@ -1,7 +1,7 @@
 /* Token Launch Radar: the page.
    It reruns model.js on the sealed snapshot (../data.js, written by main.ts), checks the result against
-   board.json's values (selfChecks), and draws four views: the ranked board, the traded tokens the
-   curve is fitted on, tickers on record, and what was set aside. Every view is a URL:
+   board.json's values (selfChecks), and draws three views: the ranked board, the protocols with a
+   token on record, and what was set aside. Every view is a URL:
    #/?tab=&q=&cat=&tier=&verdict=&conf=&sort=&dir=&dep=&share=   #/p/<slug> */
 (function () {
   'use strict';
@@ -24,7 +24,6 @@
   const pct = (x) => (x === null ? 'unreported' : (x >= 0 ? '+' : '') + x.toFixed(1) + '%');
   const since = (d) => (d === null ? 'unknown' : d < 60 ? d + ' d' : d < 730 ? Math.round(d / 30.44) + ' mo' : (d / 365.25).toFixed(1) + ' yr');
   const miss = (ln) => '×' + Math.exp(ln).toFixed(2); // a median |ln| miss read as a multiple: ×2 is half or double
-  const short = (d) => '$' + (d >= 1e9 ? d / 1e9 + 'B' : d >= 1e6 ? d / 1e6 + 'M' : d / 1e3 + 'K');
   const sub = (s) => '<small>' + s + '</small>';
   const tone = (n) => (n > 0 ? 'pos' : 'neg');
   const badge = (v) => '<span class="verdict ' + v + '">' + v + '</span>';
@@ -75,7 +74,7 @@
     return state.dep || state.share ? M.farmPlan(r, radar.as_of, { deposit: +state.dep, share: +state.share / 100 }) : r.farm;
   }
 
-  // ---- The four views of the snapshot ----------------------------------------------------------------
+  // ---- The three views of the snapshot ---------------------------------------------------------------
 
   const lnLo = Math.log(Math.min.apply(null, rows.map((r) => r.range[0])));
   const lnHi = Math.log(Math.max.apply(null, rows.map((r) => r.range[1])));
@@ -94,37 +93,30 @@
     board: {
       label: 'No token recorded',
       rows: rows,
-      note: 'Ranked by implied value. Net of fees is the position’s modelled share of the launch minus the plan’s fees; board.json carries the default scenario (plan size, 5% drop share).',
+      note: 'Ranked by implied value. Net of fees is the position’s share of the launch minus the plan’s fees, at plan size and a 5% drop share: both assumptions, and the scenario board.json carries.',
       cols: [
         { k: 'rank', label: '# · range', num: 1, up: 1, get: (r) => r.rank, cell: (r) => r.rank + sub(r.rank_range[0] + '–' + r.rank_range[1]) },
         { k: 'name', label: 'Protocol', up: 1, get: (r) => r.name.toLowerCase(), cell: (r) => '<a class="name" href="#/p/' + encodeURIComponent(r.slug) + '">' + esc(r.name) + '</a><span class="tag ' + r.tier + '">' + TIER[r.tier] + '</span>' + sub(esc(r.category) + ' · ' + esc(r.farm.chain) + (r.chains.length > 1 ? ' +' + (r.chains.length - 1) : '')) },
         tvlCol,
         { k: 'change', label: '7d TVL', num: 1, get: (r) => r.change_7d, cell: (r) => '<span class="' + (r.change_7d === null ? 'muted' : tone(r.change_7d)) + '">' + pct(r.change_7d) + '</span>' },
         { k: 'age', label: 'No token for', num: 1, get: (r) => r.age_days, cell: (r) => since(r.age_days) },
+        { k: 'odds', label: 'Peer odds', num: 1, get: (r) => r.odds, cell: (r) => (r.odds * 100).toFixed(0) + '%' + sub('× ' + usd(r.if_launched)) },
         { k: 'implied', label: 'Implied · middle half', num: 1, get: (r) => r.implied_value_usd, cell: (r) => '<b>' + usd(r.implied_value_usd) + '</b>' + rangeBar(r) + sub(usd(r.range[0]) + ' to ' + usd(r.range[1])) },
-        { k: 'net', label: 'Net of fees', num: 1, get: (r) => r.plan.net, cell: (r) => badge(r.plan.verdict) + ' <b class="' + tone(r.plan.net) + '">' + signed(r.plan.net) + '</b>' + sub('on ' + usd(r.plan.deposit) + ' · ' + usd(r.plan.cost) + ' fees') },
-        { k: 'hour', label: 'Net / hour', num: 1, get: (r) => r.plan.perHour, cell: (r) => '<span class="' + tone(r.plan.perHour) + '">' + signed(r.plan.perHour) + '</span>' + sub(r.plan.hours.toFixed(1) + ' h · ' + r.plan.weeks + ' wk') },
+        { k: 'net', label: 'Net of fees', num: 1, get: (r) => r.plan.net, cell: (r) => badge(r.plan.verdict) + ' <b class="' + tone(r.plan.net) + '">' + signed(r.plan.net) + '</b>' + sub('on ' + usd(r.plan.deposit) + ' · ' + usd(r.plan.cost) + ' fees · ' + r.plan.hours.toFixed(1) + ' h') },
         { k: 'conf', label: 'Confidence', get: (r) => CONF.indexOf(r.confidence), cell: (r) => '<span class="conf ' + r.confidence + '">' + r.confidence + '</span>' },
       ],
     },
-    traded: {
-      label: 'Token trades',
-      rows: radar.traded,
-      note: 'These tokens already trade, so they are never ranked. The ' + T.n + ' with a market cap are the comps the curve is fitted on; “priced blind” is what a fit that never saw the token said.',
+    tokens: {
+      label: 'Token on record',
+      rows: radar.tokens,
+      note: 'A token is on record for these, so they are never ranked. The ' + T.n + ' with a market cap are the comps the value curve is fitted on; “priced blind” is a fit that never saw the token.',
       cols: [
         nameCol,
         tvlCol,
-        { k: 'cap', label: 'Market cap', num: 1, get: (r) => r.mcap_usd, cell: (r) => (r.mcap_usd ? usd(r.mcap_usd) : '<span class="muted">no cap reported</span>') },
-        { k: 'ratio', label: 'Cap / TVL', num: 1, get: (r) => r.mcap_usd && r.mcap_usd / r.tvl_usd, cell: (r) => (r.mcap_usd ? (r.mcap_usd / r.tvl_usd).toFixed(2) : '') },
+        { k: 'cap', label: 'Market cap', num: 1, get: (r) => r.mcap_usd, cell: (r) => (r.mcap_usd ? usd(r.mcap_usd) : '<span class="muted">none reported</span>') },
         { k: 'blind', label: 'Priced blind', num: 1, get: (r) => r.blind, cell: (r) => (r.blind ? usd(r.blind) : '') },
         { k: 'miss', label: 'Miss', num: 1, get: (r) => r.blind && blindMiss(r), cell: (r) => (r.blind ? miss(blindMiss(r)) + sub(r.mcap_usd > r.blind ? 'too low' : 'too high') : '') },
       ],
-    },
-    ticker: {
-      label: 'Ticker on record',
-      rows: radar.ticker,
-      note: 'A ticker is on record with no CoinGecko id and no cap: a token exists, so these are neither ranked nor used as comps.',
-      cols: [nameCol, tvlCol],
     },
     aside: {
       label: 'Set aside',
@@ -157,9 +149,6 @@
       html: '<table class="grid"><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table>',
     };
   }
-
-  /** The board rows on screen, as a CSV data URI. */
-  const csv = (list) => 'data:text/csv;charset=utf-8,' + encodeURIComponent('rank,best,worst,slug,category,tvl_usd,change_7d,no_token_days,implied_usd,low_usd,high_usd,verdict,net_usd,fees_usd,hours\n' + list.map((r) => [r.rank, r.rank_range[0], r.rank_range[1], r.slug, '"' + r.category + '"', r.tvl_usd, r.change_7d, r.age_days, r.implied_value_usd, r.range[0], r.range[1], r.plan.verdict, r.plan.net.toFixed(2), r.plan.cost.toFixed(2), r.plan.hours.toFixed(1)].join(',')).join('\n'));
 
   // ---- Proof strip: the page checks itself, counts every protocol and states how far to trust it ---
 
@@ -196,8 +185,8 @@
       '<div class="kpis">' +
       kpi('Ranked', rows.length, 'of ' + c.total + ' read · all ' + n((r) => r.watchlist) + ' on the watchlist, plus ' + n((r) => !r.watchlist) + ' it leaves out') +
       kpi('Implied value', usd(rows.reduce((s, r) => s + r.implied_value_usd, 0)), 'summed over the board · #1 ' + esc(rows[0].name) + ' ' + usd(rows[0].implied_value_usd), 'amber') +
-      kpi('Held-out miss', miss(ch.cv.median), 'typical, ' + T.n + ' traded tokens priced blind · one flat multiple misses by ' + miss(T.flat.cv.median)) +
-      kpi('Range holds', ch.cv.inBand + ' / ' + ch.cv.n, 'held-out caps inside the stated middle half · older → newer ' + ch.wf.inBand + ' / ' + ch.wf.n) +
+      kpi('Held-out miss', miss(ch.cv.score), 'typical, ' + T.n + ' traded tokens priced blind · one flat multiple misses by ' + miss(T.flat.cv.score)) +
+      kpi('Peer odds, held out', T.odds.best.cv.right + ' / ' + T.peers, 'peers called right on whether they record a token · the base rate alone gets ' + T.odds.steps[0].cv.right) +
       kpi('Worth farming', n((r) => r.plan.verdict === 'farm') + ' farm', n((r) => r.plan.verdict === 'thin') + ' thin · ' + n((r) => r.plan.verdict === 'skip') + ' skip, net of fees against idle cash at ' + M.IDLE_APR * 100 + '%', 'farm') +
       kpi('Best net per hour', signed(best.plan.perHour), esc(best.name) + ' · ' + signed(best.plan.net) + ' on ' + usd(best.plan.deposit) + ' in ' + best.plan.hours.toFixed(1) + ' h') +
       '</div>' +
@@ -207,72 +196,40 @@
     );
   }
 
-  // ---- Side panel: the test the model had to pass, the fitted formula, and the assumptions ---------
+  // ---- Side panel: the tests both fits had to pass, and the fitted formulas ------------------------
 
   function evidence() {
-    const LABEL = { size: 'Size curve: ln TVL', growth: '+ 7-day TVL growth', age: '+ time with no token', category: '+ category premium' };
-    const KEPT = '<span class="mark kept">kept</span>';
-    const OUT = '<span class="mark out">not kept</span>';
-    const row = (label, t, mark, cls) => '<tr class="' + cls + '"><td>' + label + '</td><td class="num">' + miss(t.cv.median) + '</td><td class="num">' + miss(t.wf.median) + '</td><td>' + mark + '</td></tr>';
+    const LABEL = { growth: '+ 7-day TVL growth', age: '+ time with no token', category: '+ category premium', size: '+ size, ln TVL' };
+    const MARK = { true: '<span class="mark kept">kept</span>', false: '<span class="mark out">not kept</span>' };
+    const row = (label, t, show, mark, cls) => '<tr class="' + cls + '"><td>' + label + '</td><td class="num">' + show(t.cv.score) + '</td><td class="num">' + show(t.wf.score) + '</td><td>' + mark + '</td></tr>';
+    const table = (head, start, chosen, show, before, after) =>
+      '<table class="test"><thead><tr><th>' + head + '</th><th class="num">5-fold</th><th class="num">old → new</th><th></th></tr></thead><tbody>' + before +
+      chosen.steps.map((s) => row(LABEL[s.term] || start, s, show, LABEL[s.term] ? MARK[s.kept] : 'start', s.kept ? '' : 'base')).join('') + after + '</tbody></table>';
     return (
-      '<section class="card"><h3>Does it hold on tokens it never saw?</h3>' +
-      '<p><code>testModels</code> reprices each of the ' + T.n + ' traded tokens with a fit that never saw it: five folds, and older → newer (the oldest 60% price the newest 40%). The figure is the typical miss: ×2 means half or double the real cap. A term stays only if it cuts the five-fold miss by 1%.</p>' +
-      '<table class="test"><thead><tr><th>Term, in order</th><th class="num">5-fold</th><th class="num">old → new</th><th></th></tr></thead><tbody>' +
-      row('One flat cap / TVL multiple', T.flat, 'baseline', 'base') +
-      T.steps.map((s) => row(LABEL[s.term], s, s.kept ? KEPT : OUT, s.kept ? '' : 'base')).join('') +
-      (T.guarded ? row('Range guard on growth and age', T.guarded, T.guard ? KEPT : OUT, T.guard ? 'final' : 'base') : '') +
-      '</tbody></table>' +
-      '<p>Older → newer is shown, not used to choose: it asks an age term fitted on old listings to price new ones, the reading outside the fitted range that the guard cuts off.</p></section>'
+      '<section class="card"><h3>Does it hold on protocols it never saw?</h3>' +
+      '<p><code>chooseTerms</code> adds one term at a time and keeps it only if it does 1% better in both tests on protocols the fit never saw: five folds, and older → newer (the oldest 60% against the newest 40%).</p>' +
+      table('Value · typical miss', 'Size curve: ln TVL', T.value, miss, row('One flat cap / TVL multiple', T.flat, miss, 'baseline', 'base'), T.guarded ? row('Range guard on growth', T.guarded, miss, MARK[T.guard], T.guard ? 'final' : 'base') : '') +
+      table('Peer odds · Brier', 'Base rate of the peers', T.odds, (x) => x.toFixed(3), '', '') +
+      '<p>Value is scored on the ' + T.n + ' traded tokens (×2 is half or double the real cap), odds on the ' + T.peers + ' stand-alone protocols (0.25 is a coin flip, lower is better). The guard is a safety limit, not a term: kept when it costs under 2% in five folds.</p></section>'
     );
   }
 
   function formula() {
     const f = model.fit;
+    const o = model.oddsFit;
     const u = model.use;
     const term = (x) => (x < 0 ? ' − ' : ' + ') + Math.abs(x).toFixed(2);
-    if (model.winner === 'F') return '<section class="card"><h3>How a row is priced</h3><p>TVL × the median cap / TVL of the traded tokens (<code>fitFlat</code>): no curve beat it held out.</p></section>';
+    const NAME = { age: 'ln(1 + days)', size: 'ln TVL', growth: 'growth' };
+    const value = model.winner === 'F' ? 'TVL × ' + f.global.toFixed(3) : 'exp(' + f.b[0].toFixed(2) + term(f.b[1]) + ' · ln TVL' + (u.growth ? term(f.b[2]) + ' · growth' : '') + (u.age ? term(f.b[3]) + ' · ln(1 + days)' : '') + ')' + (u.category ? ' × category premium' : '');
+    const odds = o ? '<br>odds = 1 / (1 + exp(' + (-o.b[0]).toFixed(2) + Object.keys(NAME).filter((k) => o.use[k]).map((k, i) => term(-o.b[i + 1]) + ' · ' + NAME[k]).join('') + '))' : '';
     return (
       '<section class="card"><h3>How a row is priced</h3>' +
-      '<div class="formula">ln value = ' + f.b[0].toFixed(2) + term(f.b[1]) + ' · ln TVL' + (u.growth ? term(f.b[2]) + ' · growth' : '') + (u.age ? term(f.b[3]) + ' · ln(1 + days)' : '') + (u.category ? ' + category premium' : '') + '</div>' +
-      '<p><b>growth</b> is the 7-day TVL change as a fraction, <b>days</b> the time tracked with no token. Least squares on the ' + f.n + ' traded tokens’ caps (<code>fitCurve</code>), refitted on every load; no protocol is named anywhere.' +
-      (model.guard ? ' Growth is read only between ' + pct(f.gRange[0] * 100) + ' and ' + pct(f.gRange[1] * 100) + ', days between ' + Math.round(Math.exp(f.aRange[0]) - 1) + ' and ' + Math.round(Math.exp(f.aRange[1]) - 1) + ': 90% of the comps sit there.' : '') + '</p>' +
-      (u.growth && f.b[2] < 0 ? '<p>The growth coefficient is negative: among these traded tokens, TVL that rose over 7 days went with a lower cap per dollar. It is the fit’s finding, kept because it lowers the held-out miss.</p>' : '') +
-      '<p>Middle half: ×' + Math.exp(model.band[0]).toFixed(2) + ' to ×' + Math.exp(model.band[1]).toFixed(2) + ' of the value, the central half of the fit’s own misses (<code>missBand</code>).</p>' +
-      scatter(null) +
-      '<p class="cap">Grey: real caps of the traded tokens. Amber: implied values on the board. Cap against TVL, log axes.</p></section>'
+      '<div class="formula">implied = value' + (o ? ' × odds' : '') + '<br>value = ' + value + odds + '</div>' +
+      '<p><b>value</b> is what the ' + f.n + ' traded tokens say a launch at this TVL is worth (<code>fitCurve</code>). <b>odds</b> is the share of stand-alone protocols with this much time on record that already carry a token (<code>fitOdds</code>): the peers’ record, not a forecast that this one launches. <b>growth</b> is the 7-day TVL change as a fraction, <b>days</b> the time tracked with no token. Both fits are redone on every load; no protocol is named anywhere.' +
+      (model.guard ? ' Growth is read only between ' + pct(f.gRange[0] * 100) + ' and ' + pct(f.gRange[1] * 100) + ', where 90% of the comps sit.' : '') + '</p>' +
+      (u.growth && f.b[2] < 0 ? '<p>The growth coefficient is negative: among these traded tokens, TVL that rose over 7 days went with a lower cap per dollar. It is the fit’s finding, kept because it lowers the held-out miss in both tests.</p>' : '') +
+      '<p>Middle half: ×' + Math.exp(model.band[0]).toFixed(2) + ' to ×' + Math.exp(model.band[1]).toFixed(2) + ' of the value, the central half of the fit’s own misses (<code>missBand</code>). Held out, ' + T.chosen.cv.inBand + ' of ' + T.chosen.cv.n + ' real caps landed inside.</p></section>'
     );
-  }
-
-  function assumptions() {
-    return (
-      '<section class="card"><h3>What the farm plans assume</h3>' +
-      '<p><code>farmPlan</code> sizes the position from TVL, age and drain, and takes fees off its share. Assumptions, not snapshot data:</p>' +
-      '<ul class="notes"><li><b>' + M.DROP_SHARE * 100 + '%</b> of the implied value reaches depositors, pro rata to TVL (switch it above).</li>' +
-      '<li><b>FARM</b> when net of fees beats idle cash at ' + M.IDLE_APR * 100 + '% a year, <b>THIN</b> when positive but below it, <b>SKIP</b> when fees exceed the share.</li>' +
-      '<li>Fee per transaction: Ethereum ' + usd(M.chainFee('Ethereum')) + ', Bitcoin ' + usd(M.chainFee('Bitcoin')) + ', Solana ' + usd(M.chainFee('Solana')) + ', other chains ' + usd(M.chainFee('')) + '; trading fee 0.1%.</li></ul></section>'
-    );
-  }
-
-  /** Market cap against TVL on log axes: the traded comps' real caps and the board's implied values. */
-  function scatter(mark) {
-    const W = 360;
-    const H = 200;
-    const L = 34;
-    const B = 16;
-    const comps = radar.traded.filter((c) => c.mcap_usd);
-    const span = (xs) => [Math.log(Math.min.apply(null, xs)), Math.log(Math.max.apply(null, xs))];
-    const xr = span(comps.map((c) => c.tvl_usd).concat(rows.map((r) => r.tvl_usd)));
-    const yr = span(comps.map((c) => c.mcap_usd).concat(rows.map((r) => r.implied_value_usd)));
-    const X = (v) => L + ((Math.log(v) - xr[0]) / (xr[1] - xr[0])) * (W - L - 6);
-    const Y = (v) => H - B - ((Math.log(v) - yr[0]) / (yr[1] - yr[0])) * (H - B - 6);
-    const dot = (x, y, cls, r) => '<circle class="' + cls + '" cx="' + X(x).toFixed(1) + '" cy="' + Y(y).toFixed(1) + '" r="' + r + '"/>';
-    let ticks = '';
-    for (let d = 1e3; d <= 1e12; d *= 10) {
-      const ln = Math.log(d);
-      if (ln >= yr[0] && ln <= yr[1]) ticks += '<line x1="' + L + '" x2="' + W + '" y1="' + Y(d).toFixed(1) + '" y2="' + Y(d).toFixed(1) + '"/><text x="' + (L - 4) + '" y="' + (Y(d) + 3).toFixed(1) + '" text-anchor="end">' + short(d) + '</text>';
-      if (ln >= xr[0] && ln <= xr[1]) ticks += '<text x="' + X(d).toFixed(1) + '" y="' + (H - 3) + '" text-anchor="middle">' + short(d) + '</text>';
-    }
-    return '<svg class="plot" viewBox="0 0 ' + W + ' ' + H + '">' + ticks + comps.map((c) => dot(c.tvl_usd, c.mcap_usd, 'c', 2)).join('') + rows.map((r) => dot(r.tvl_usd, r.implied_value_usd, 'r', 1.6)).join('') + (mark ? dot(mark.tvl_usd, mark.implied_value_usd, 'm', 5) : '') + '</svg>';
   }
 
   // ---- Board view: tabs, filters, scenario switches, the table and the side panel -----------------
@@ -302,9 +259,9 @@
       '<select id="f-cat"><option value="">All categories</option>' + options(categories, state.cat) + '</select>' +
       (onBoard ? '<select id="f-conf"><option value="">Any confidence</option>' + options(CONF, state.conf) + '</select>' : '') +
       '<a class="chip solo" href="' + esc(hashFor(Object.assign({}, BLANK, { tab: state.tab }))) + '">Reset</a>' +
-      (onBoard ? '<a class="chip solo" download="radar.csv" href="' + csv(t.list) + '">CSV</a>' : '') + '</div>' +
+      '</div>' +
       t.html +
-      '</div><aside class="side">' + evidence() + formula() + assumptions() + '</aside></div>'
+      '</div><aside class="side">' + evidence() + formula() + '</aside></div>'
     );
   }
 
@@ -316,7 +273,7 @@
     const u = model.use;
     const prev = rows[r.rank - 2];
     const next = rows[r.rank];
-    const near = radar.traded.filter((c) => c.mcap_usd).sort((x, y) => Math.abs(Math.log(x.tvl_usd / r.tvl_usd)) - Math.abs(Math.log(y.tvl_usd / r.tvl_usd))).slice(0, 5);
+    const near = radar.tokens.filter((c) => c.mcap_usd).sort((x, y) => Math.abs(Math.log(x.tvl_usd / r.tvl_usd)) - Math.abs(Math.log(y.tvl_usd / r.tvl_usd))).slice(0, 5);
     const term = (on, label, x) => '<tr' + (on ? '' : ' class="muted"') + '><td>' + label + '</td><td class="num">' + (on ? '× ' + x.toFixed(2) : 'tested, not kept') + '</td></tr>';
     const fact = (k, v) => '<div><span class="k">' + k + '</span>' + v + '</div>';
     const go = (x, label) => (x ? '<a class="chip solo" href="#/p/' + encodeURIComponent(x.slug) + '">' + label + '</a>' : '');
@@ -336,8 +293,10 @@
       '<table class="test"><tbody>' +
       '<tr><td>TVL ' + usd(r.tvl_usd) + ' on the size curve</td><td class="num">' + usd(p.base) + '</td></tr>' +
       term(u.growth, '7-day TVL change: ' + pct(r.change_7d), p.growth) +
-      term(u.age, 'No token for ' + since(r.age_days) + (r.listed_at ? ' (tracked since ' + esc(r.listed_at) + ')' : ''), p.age) +
+      term(u.age, 'Time with no token, as a value term', p.age) +
       term(u.category, 'Category premium: ' + esc(r.category), p.category) +
+      '<tr><td>Value if it launches</td><td class="num">' + usd(r.if_launched) + '</td></tr>' +
+      (model.oddsFit ? '<tr><td>Peer token odds: no token for ' + since(r.age_days) + (r.listed_at ? ' (tracked since ' + esc(r.listed_at) + ')' : '') + '</td><td class="num">× ' + (r.odds * 100).toFixed(0) + '%</td></tr>' : '') +
       '<tr class="final"><td>Implied value</td><td class="num">' + usd(r.implied_value_usd) + '</td></tr>' +
       '</tbody></table>' +
       '<p>Confidence: <span class="conf ' + r.confidence + '">' + r.confidence + '</span>' + (r.notes.length ? '' : ' · every input reported and inside the range of the traded comps') + '</p>' +
@@ -347,7 +306,7 @@
       '<p>The five comps nearest in TVL: their real cap and what the curve said blind.</p>' +
       '<table class="test"><thead><tr><th>Token trades</th><th class="num">TVL</th><th class="num">Real cap</th><th class="num">Priced blind</th></tr></thead><tbody>' +
       near.map((c) => '<tr><td>' + esc(c.name) + sub(esc(c.category)) + '</td><td class="num">' + usd(c.tvl_usd) + '</td><td class="num">' + usd(c.mcap_usd) + '</td><td class="num">' + usd(c.blind) + '</td></tr>').join('') +
-      '</tbody></table>' + scatter(r) + '<p class="cap">Ring: this protocol. Grey: real caps of traded tokens. Amber: the board.</p></section>' +
+      '</tbody></table></section>' +
       '</div><div>' +
       '<section class="card"><h3>Farm plan · ' + badge(f.verdict) + '</h3>' +
       '<div class="budget">' + fact('Position', usd(f.deposit)) + fact('Weeks', f.weeks) + fact('Fees', usd(f.cost)) + fact('Time', f.hours.toFixed(1) + ' h') + fact('Modelled share', usd(f.drop)) + fact('Net of fees', '<span class="' + tone(f.net) + '">' + signed(f.net) + '</span>') + fact('Net / hour', '<span class="' + tone(f.net) + '">' + signed(f.perHour) + '</span>') + fact('Break-even drop', (f.breakEven * 100).toFixed(1) + '%') + '</div>' +

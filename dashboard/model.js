@@ -1,19 +1,21 @@
 /* Token Launch Radar: the model.
    One file, loaded twice: main.ts runs it on Node to write board.json, and the page runs it in the
    browser to explain every row. Nothing here names a protocol: each figure follows from the fields
-   the sealed snapshot carries. The value model is fitted on the snapshot's own traded tokens, and
-   every term in it has to earn its place on tokens the fit never saw (testModels). */
+   the sealed snapshot carries. Implied value = what the traded tokens say a launch at this TVL is
+   worth (fitCurve) x how often peers with this record already carry a token (fitOdds). A term stays
+   in either fit only if it does better on protocols the fit never saw, in two tests (chooseTerms). */
 (function (root) {
   'use strict';
 
   const DAY_MS = 86400000;
-  const FOLDS = 5;          // held-out test: comps sorted by slug, fold = index mod 5 (no randomness)
-  const OLDER_SHARE = 0.6;  // second test: fit on the oldest 60% of the dated comps, price the newest 40%
+  const FOLDS = 5;          // first test: items sorted by slug, fold = index mod 5 (no randomness)
+  const OLDER_SHARE = 0.6;  // second test: fit on the oldest 60% of the dated items, score the newest 40%
   const WIN_MARGIN = 0.95;  // the fitted curve is used only if its held-out miss is 5% under one flat multiple's
-  const KEEP_GAIN = 0.99;   // a term stays in the curve only if it cuts the five-fold miss by at least 1%
+  const KEEP_GAIN = 0.99;   // a term stays only if it cuts the held-out score by at least 1% in both tests
   const KEEP_MARGIN = 1.02; // the range guard stays if it costs no more than 2% of held-out miss
   const CAT_SHRINK = 5;     // a category's premium is its summed residual over (its comps + 5)
-  const TERMS = ['growth', 'age', 'category']; // tried in this order on top of the size curve
+  const VALUE_TERMS = ['growth', 'age', 'category']; // tried in this order on top of the size curve
+  const ODDS_TERMS = ['age', 'size', 'growth'];      // tried in this order on top of the peers' base rate
 
   // The house rule's visible half: products of a token that already trades are not launches to come.
   const DERIVATIVE_CATEGORIES = ['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX'];
@@ -162,66 +164,115 @@
     return [quantile(own, 0.25), quantile(own, 0.75)];
   }
 
-  // ---- Held-out tests: every traded comp is priced by a fit that never saw it ----------------------
+  // ---- Token odds: how often peers with this record already carry a token -------------------------
 
-  /** Price `test` with a fit that saw only `train`. A miss is ln(actual / predicted); `inBand` counts
-      the held-out caps that land inside the middle-half band the fit states from `train` alone. */
-  function priceBlind(acc, train, test, asOf, fitFn, guard) {
-    const fit = fitFn(train, asOf);
-    const band = missBand(fit, train, asOf, guard);
-    for (const p of test) {
-      const guess = predict(fit, p, asOf, guard);
-      const miss = Math.log(p.mcap_usd / guess);
-      acc.miss.push(Math.abs(miss));
-      acc.blind[p.slug] = guess;
-      if (miss >= band[0] && miss <= band[1]) acc.inBand++;
+  const oddsRow = (fit, f) => [1].concat(fit.use.age ? [f.a === null ? fit.aMean : f.a] : [], fit.use.size ? [f.t] : [], fit.use.growth ? [f.g === null ? fit.gMean : f.g] : []);
+
+  /** Logistic regression by 25 Newton steps: the share of stand-alone protocols that record a token,
+      from the terms named in `use`. With no term it is the peers' base rate. */
+  function fitOdds(train, asOf, use) {
+    const feats = train.map((p) => features(p, asOf));
+    const fit = { use: use, n: train.length, gMean: mean(feats.map((f) => f.g).filter(notNull)), aMean: mean(feats.map((f) => f.a).filter(notNull)) };
+    const X = feats.map((f) => oddsRow(fit, f));
+    const y = train.map((p) => (tokenState(p) === 'pre' ? 0 : 1));
+    fit.b = X[0].map(() => 0);
+    for (let step = 0; step < 25; step++) {
+      const q = X.map((row) => 1 / (1 + Math.exp(-row.reduce((s, v, i) => s + v * fit.b[i], 0))));
+      const H = fit.b.map((_, i) => fit.b.map((_, j) => X.reduce((s, row, r) => s + row[i] * row[j] * q[r] * (1 - q[r]), 0)));
+      const d = solve(H, fit.b.map((_, i) => X.reduce((s, row, r) => s + row[i] * (y[r] - q[r]), 0)));
+      if (d === null) break;
+      fit.b = fit.b.map((v, i) => v + d[i]);
     }
+    return fit;
   }
 
-  const tally = () => ({ miss: [], blind: {}, inBand: 0 });
-  const verdictOf = (acc) => ({ n: acc.miss.length, median: median(acc.miss), inBand: acc.inBand, blind: acc.blind });
+  const oddsOf = (fit, p, asOf) => 1 / (1 + Math.exp(-oddsRow(fit, features(p, asOf)).reduce((s, v, i) => s + v * fit.b[i], 0)));
 
-  /** Five folds by slug order: each comp is priced once, by a fit made on the other four folds. */
-  function heldOut(comps, asOf, fitFn, guard) {
-    const sorted = comps.slice().sort(bySlug);
-    const acc = tally();
-    for (let k = 0; k < FOLDS; k++) priceBlind(acc, sorted.filter((_, i) => i % FOLDS !== k), sorted.filter((_, i) => i % FOLDS === k), asOf, fitFn, guard);
-    return verdictOf(acc);
-  }
+  // ---- Two held-out tests, shared by both fits -----------------------------------------------------
 
-  /** Older to newer: a fit on the oldest 60% of the comps with a listing day prices the newest 40%. */
-  function walkForward(comps, asOf, fitFn, guard) {
-    const dated = comps.filter((p) => p.listed_at !== null).sort((p, q) => (p.listed_at < q.listed_at ? -1 : p.listed_at > q.listed_at ? 1 : bySlug(p, q)));
+  /** Five folds by slug order; and older to newer, the oldest 60% of the dated items against the newest 40%. */
+  function splits(items) {
+    const s = items.slice().sort(bySlug);
+    const dated = items.filter((p) => p.listed_at !== null).sort((p, q) => (p.listed_at < q.listed_at ? -1 : p.listed_at > q.listed_at ? 1 : bySlug(p, q)));
     const cut = Math.floor(dated.length * OLDER_SHARE);
-    const acc = tally();
-    priceBlind(acc, dated.slice(0, cut), dated.slice(cut), asOf, fitFn, guard);
-    return verdictOf(acc);
+    const cv = [];
+    for (let k = 0; k < FOLDS; k++) cv.push([s.filter((_, i) => i % FOLDS !== k), s.filter((_, i) => i % FOLDS === k)]);
+    return { cv: cv, wf: [[dated.slice(0, cut), dated.slice(cut)]] };
   }
 
-  /** The whole test, rerun on every load. The flat multiple first; then the size curve, and each further
-      term in turn, kept only if it lowers the five-fold miss by 1%; then the range guard; and the curve
-      is used at all only if it beats the flat multiple by 5%. The older-to-newer column is shown, not used. */
-  function testModels(comps, asOf) {
-    const both = (fitFn, guard) => ({ cv: heldOut(comps, asOf, fitFn, guard), wf: walkForward(comps, asOf, fitFn, guard) });
-    const curve = (use, guard) => both((train) => fitCurve(train, asOf, use), guard);
-    const out = { n: comps.length, flat: both(fitFlat), steps: [], use: {} };
-    let best = curve(out.use);
-    out.steps.push(Object.assign({ term: 'size', kept: true }, best));
-    for (const term of TERMS) {
-      const use = Object.assign({}, out.use);
-      use[term] = true;
-      const trial = curve(use);
-      const kept = trial.cv.median <= KEEP_GAIN * best.cv.median;
-      out.steps.push(Object.assign({ term: term, kept: kept }, trial));
-      if (kept) {
-        out.use = use;
-        best = trial;
+  /** The typical miss of a value fit on caps it never saw: median |ln(actual / predicted)|.
+      `inBand` counts the held-out caps inside the band the fit states from its own comps. */
+  function valueTest(pairs, asOf, use, guard) {
+    const miss = [];
+    const out = { inBand: 0, blind: {} };
+    for (const [train, test] of pairs) {
+      const fit = use ? fitCurve(train, asOf, use) : fitFlat(train);
+      const band = missBand(fit, train, asOf, guard);
+      for (const p of test) {
+        const guess = predict(fit, p, asOf, guard);
+        const m = Math.log(p.mcap_usd / guess);
+        miss.push(Math.abs(m));
+        out.blind[p.slug] = guess;
+        if (m >= band[0] && m <= band[1]) out.inBand++;
       }
     }
-    out.guarded = out.use.growth || out.use.age ? curve(out.use, true) : null;
-    out.guard = out.guarded !== null && out.guarded.cv.median <= KEEP_MARGIN * best.cv.median;
-    out.winner = best.cv.median <= WIN_MARGIN * out.flat.cv.median ? 'B' : 'F';
-    out.chosen = out.winner === 'F' ? out.flat : out.guard ? out.guarded : best;
+    out.n = miss.length;
+    out.score = median(miss);
+    return out;
+  }
+
+  /** The Brier score of an odds fit on peers it never saw, and how many it called right. */
+  function oddsTest(pairs, asOf, use) {
+    const out = { n: 0, right: 0, score: 0 };
+    for (const [train, test] of pairs) {
+      const fit = fitOdds(train, asOf, use);
+      for (const p of test) {
+        const y = tokenState(p) === 'pre' ? 0 : 1;
+        const q = oddsOf(fit, p, asOf);
+        out.score += (q - y) * (q - y);
+        out.n++;
+        if (q >= 0.5 === (y === 1)) out.right++;
+      }
+    }
+    out.score /= out.n;
+    return out;
+  }
+
+  /** Terms are added one at a time; one stays only if it lowers the held-out score by 1% in both tests. */
+  function chooseTerms(terms, test) {
+    const out = { use: {}, best: test({}), steps: [] };
+    out.steps.push(Object.assign({ term: 'start', kept: true }, out.best));
+    for (const term of terms) {
+      const use = Object.assign({}, out.use);
+      use[term] = true;
+      const t = test(use);
+      const kept = t.cv.score <= KEEP_GAIN * out.best.cv.score && t.wf.score <= KEEP_GAIN * out.best.wf.score;
+      out.steps.push(Object.assign({ term: term, kept: kept }, t));
+      if (kept) {
+        out.use = use;
+        out.best = t;
+      }
+    }
+    return out;
+  }
+
+  /** Everything the model has to prove, rerun on every load: both fits term by term, and the range guard. */
+  function testModels(comps, peers, asOf) {
+    const c = splits(comps);
+    const p = splits(peers);
+    const value = (use, guard) => ({ cv: valueTest(c.cv, asOf, use, guard), wf: valueTest(c.wf, asOf, use, guard) });
+    const out = {
+      n: comps.length,
+      peers: peers.length,
+      flat: value(null),
+      value: chooseTerms(VALUE_TERMS, value),
+      odds: chooseTerms(ODDS_TERMS, (use) => ({ cv: oddsTest(p.cv, asOf, use), wf: oddsTest(p.wf, asOf, use) })),
+    };
+    const v = out.value;
+    out.guarded = v.use.growth || v.use.age ? value(v.use, true) : null;
+    out.guard = out.guarded !== null && out.guarded.cv.score <= KEEP_MARGIN * v.best.cv.score;
+    out.winner = v.best.cv.score <= WIN_MARGIN * out.flat.cv.score ? 'B' : 'F';
+    out.chosen = out.winner === 'F' ? out.flat : out.guard ? out.guarded : v.best;
     return out;
   }
 
@@ -245,15 +296,16 @@
   }
 
   /** What is unreported or outside the comps' range for one protocol; each note costs a confidence step. */
-  function inputNotes(fit, p, asOf, guard) {
+  function inputNotes(fit, oddsFit, p, asOf, guard) {
     const notes = [];
     const f = features(p, asOf);
     const use = fit.use;
+    const odds = oddsFit ? oddsFit.use : {};
     const outside = (v, range) => range !== undefined && (v < range[0] || v > range[1]);
     const edge = guard ? 'read at the edge of that range' : 'the curve is read beyond it';
-    if (use.growth && f.g === null) notes.push('7-day TVL change unreported: growth term left neutral');
+    if ((use.growth || odds.growth) && f.g === null) notes.push('7-day TVL change unreported: read as the mean');
     else if (use.growth && outside(f.g, fit.gRange)) notes.push('7-day TVL change outside the range of the traded comps: ' + edge);
-    if (use.age && f.a === null) notes.push('listing date unknown: no-token time left neutral');
+    if ((use.age || odds.age) && f.a === null) notes.push('listing date unknown: no-token time read as the mean');
     else if (use.age && outside(f.a, fit.aRange)) notes.push('no-token time outside the range of the traded comps: ' + edge);
     if (use.category && !(p.category in fit.cat)) notes.push('no traded comp in this category: no category premium applied');
     return notes;
@@ -379,48 +431,59 @@
     const asOf = snapshot.as_of;
     const watch = new Set(snapshot.watchlist);
     const index = familyIndex(snapshot.protocols);
-    const comps = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0);
-    const test = testModels(comps, asOf);
-    const use = test.winner === 'F' ? {} : test.use;
-    const guard = test.winner === 'B' && test.guard;
-    const fit = test.winner === 'F' ? fitFlat(comps) : fitCurve(comps, asOf, use);
-    const band = missBand(fit, comps, asOf, guard);
-
     // The sibling rule is tested on the watchlist, which the house built from protocols with no parent.
     const falseKin = snapshot.protocols.filter((p) => watch.has(p.slug) && tokenKin(index, p).length > 0).map((p) => p.slug);
     const familyTrusted = falseKin.length <= FAMILY_MAX_FALSE;
 
     const counts = { total: snapshot.protocols.length, live: 0, recorded: 0, pre: 0, ranked: 0, unscored: 0, aside: { category: 0, exchange: 0, wrapped: 0, version: 0, family: 0 } };
-    const rows = [];
+    const category = (p) => (p.category === null ? 'Uncategorized' : p.category);
     const aside = [];
-    const traded = [];
-    const ticker = [];
+    const tokens = [];
+    const board = [];
+    const peers = [];
+    // First pass: each protocol goes to exactly one group, from the snapshot's facts alone.
     for (const p of snapshot.protocols) {
       const state = tokenState(p);
-      const category = p.category === null ? 'Uncategorized' : p.category;
       if (state !== 'pre') {
         counts[state]++;
-        // A token on record is never ranked; `blind` is what a fit that never saw the comp priced it at.
-        (state === 'live' ? traded : ticker).push({ slug: p.slug, name: p.name, category: category, tvl_usd: p.tvl_usd, symbol: p.symbol, mcap_usd: p.mcap_usd > 0 ? p.mcap_usd : null, blind: test.chosen.cv.blind[p.slug] || null });
+        tokens.push(p);
+        if (setAsideReason(p) === null) peers.push(p); // stands alone and records a token
         continue;
       }
       counts.pre++;
-      const onWatch = watch.has(p.slug);
       const kin = tokenKin(index, p);
-      let reason = onWatch ? null : setAsideReason(p);
-      if (reason === null && !onWatch && familyTrusted && kin.length > 0) reason = 'family';
+      let reason = watch.has(p.slug) ? null : setAsideReason(p);
+      if (reason === null && !watch.has(p.slug) && familyTrusted && kin.length > 0) reason = 'family';
       if (reason !== null) {
         counts.aside[reason]++;
-        aside.push({ slug: p.slug, name: p.name, category: category, tvl_usd: p.tvl_usd, reason: reason, kin: kin });
+        aside.push({ slug: p.slug, name: p.name, category: category(p), tvl_usd: p.tvl_usd, reason: reason, kin: kin });
         continue;
       }
+      board.push(p);
+      peers.push(p); // stands alone and records none
+    }
+
+    // Second pass: fit and test on the traded comps and on the peers, then price the board.
+    const comps = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0);
+    const test = testModels(comps, peers, asOf);
+    const use = test.winner === 'F' ? {} : test.value.use;
+    const guard = test.winner === 'B' && test.guard;
+    const fit = test.winner === 'F' ? fitFlat(comps) : fitCurve(comps, asOf, use);
+    const band = missBand(fit, comps, asOf, guard);
+    // Odds are used only if a term beat the peers' base rate held out: one factor on every row ranks nothing.
+    const oddsFit = Object.keys(test.odds.use).length ? fitOdds(peers, asOf, test.odds.use) : null;
+    const rows = [];
+    for (const p of board) {
+      const onWatch = watch.has(p.slug);
       const parts = valueParts(fit, p, asOf, guard);
-      const implied = Math.round(parts.base * parts.growth * parts.age * parts.category);
+      const launch = parts.base * parts.growth * parts.age * parts.category;
+      const odds = oddsFit ? oddsOf(oddsFit, p, asOf) : 1;
+      const implied = Math.round(launch * odds);
       if (!Number.isFinite(implied) || implied < 1) {
         counts.unscored++; // no value is invented: a row that cannot be priced stays off the board
         continue;
       }
-      const notes = inputNotes(fit, p, asOf, guard);
+      const notes = inputNotes(fit, oddsFit, p, asOf, guard);
       // The house kept every parentless protocol above its floor on the watchlist, so one above the
       // floor that passes the visible rules yet is not listed must have a parent DefiLlama records.
       const parentInferred = !onWatch && p.tvl_usd >= snapshot.floor_usd;
@@ -428,7 +491,7 @@
       rows.push({
         slug: p.slug,
         name: p.name,
-        category: category,
+        category: category(p),
         chains: p.chains,
         tvl_usd: p.tvl_usd,
         change_7d: p.change_7d,
@@ -436,6 +499,8 @@
         age_days: ageDays(asOf, p.listed_at),
         watchlist: onWatch,
         tier: onWatch ? 'watchlist' : parentInferred ? 'offlist' : 'below',
+        if_launched: Math.round(launch),
+        odds: odds,
         implied_value_usd: implied,
         range: [Math.max(1, Math.round(implied * Math.exp(band[0]))), Math.round(implied * Math.exp(band[1]))],
         parts: parts,
@@ -457,14 +522,14 @@
       source: snapshot.source,
       floor_usd: snapshot.floor_usd,
       counts: counts,
-      model: { winner: test.winner, guard: guard, use: use, test: test, fit: fit, band: band, comps: comps.length },
+      model: { winner: test.winner, guard: guard, use: use, test: test, fit: fit, oddsFit: oddsFit, band: band, comps: comps.length },
       family: { trusted: familyTrusted, false_on_watchlist: falseKin },
       rows: rows,
       aside: aside,
-      traded: traded,
-      ticker: ticker,
+      // A token on record is never ranked; `blind` is what a fit that never saw the comp priced it at.
+      tokens: tokens.map((p) => ({ slug: p.slug, name: p.name, category: category(p), tvl_usd: p.tvl_usd, symbol: p.symbol, mcap_usd: p.mcap_usd > 0 ? p.mcap_usd : null, blind: test.chosen.cv.blind[p.slug] || null })),
     };
   }
 
-  root.RadarModel = { DROP_SHARE: DROP_SHARE, IDLE_APR: IDLE_APR, chainFee: chainFee, usd: usd, farmPlan: farmPlan, testModels: testModels, buildRadar: buildRadar };
+  root.RadarModel = { DROP_SHARE: DROP_SHARE, IDLE_APR: IDLE_APR, chainFee: chainFee, usd: usd, farmPlan: farmPlan, buildRadar: buildRadar };
 })(globalThis);

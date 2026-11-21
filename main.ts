@@ -44,6 +44,8 @@ type BoardRow = {
   tvl_usd: number;
   watchlist: boolean;
   tier: string;
+  value_if_launched_usd: number;
+  peer_token_odds: number;
   value_low_usd: number;
   value_high_usd: number;
   confidence: string;
@@ -133,6 +135,8 @@ const rows: BoardRow[] = radar.rows.map((r: any) => ({
   tvl_usd: r.tvl_usd,
   watchlist: r.watchlist,
   tier: r.tier,
+  value_if_launched_usd: r.if_launched,
+  peer_token_odds: Math.round(r.odds * 10000) / 10000,
   value_low_usd: r.range[0],
   value_high_usd: r.range[1],
   confidence: r.confidence,
@@ -151,14 +155,18 @@ const board = {
   floor_usd: radar.floor_usd,
   model: {
     chosen: radar.model.winner === 'F' ? 'flat multiple' : 'fitted curve',
-    terms_kept: test.steps.filter((s: any) => s.kept).map((s: any) => s.term),
-    terms_tested_not_kept: test.steps.filter((s: any) => !s.kept).map((s: any) => s.term),
+    value_terms_kept: test.value.steps.filter((s: any) => s.kept).map((s: any) => (s.term === 'start' ? 'size' : s.term)),
+    value_terms_tested_not_kept: test.value.steps.filter((s: any) => !s.kept).map((s: any) => s.term),
+    odds_terms_kept: test.odds.steps.filter((s: any) => s.kept && s.term !== 'start').map((s: any) => s.term),
+    odds_terms_tested_not_kept: test.odds.steps.filter((s: any) => !s.kept).map((s: any) => s.term),
+    peers: test.peers,
+    held_out_brier: { base_rate: test.odds.steps[0].cv.score, chosen_five_fold: test.odds.best.cv.score, chosen_older_to_newer: test.odds.best.wf.score },
     range_guard: radar.model.guard,
     comps: radar.model.comps,
     held_out_median_abs_log_error: {
-      flat_multiple: test.flat.cv.median,
-      chosen_five_fold: test.chosen.cv.median,
-      chosen_older_to_newer: test.chosen.wf.median,
+      flat_multiple: test.flat.cv.score,
+      chosen_five_fold: test.chosen.cv.score,
+      chosen_older_to_newer: test.chosen.wf.score,
     },
     middle_half_range_holds: { inside: test.chosen.cv.inBand, of: test.chosen.cv.n },
     drop_share_assumed: model.DROP_SHARE,
